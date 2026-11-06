@@ -11,7 +11,7 @@ def test_read_par_legacy_star_file(tmp_path):
     path = tmp_path / "par.txt"
     path.write_text("f 10\nns 50\nsigma 1\nlbox 161.5\nq 1.8\neps 0.2\nrestart 1")
     p = fn.read_par(str(path))
-    assert (p.architecture, p.mode, p.colloids) == ("star", "cluster", 1)
+    assert (p.architecture, p.mode, p.present) == ("star", "cluster", (1, 0))
     assert (p.arms, p.ns, p.sigma, p.q, p.eps, p.restart, p.rcore) == (10, 50, 1.0, 1.8, 0.2, 1, 1.75)
     assert p.box == [161.5] * 3 and p.spec["input_file"] == "in.star"
 
@@ -66,7 +66,7 @@ def test_star_without_colloid_does_not_need_q_and_eps(tmp_path):
     path = tmp_path / "par.txt"
     path.write_text("colloids 0\nf 10\nns 50\nsigma 1\nlbox 100\nrestart 0\n")
     p = fn.read_par(str(path))
-    assert p.colloids == 0 and p.q is None
+    assert p.present == (0, 0) and p.q is None
 
 
 @pytest.mark.parametrize("params", [
@@ -75,6 +75,10 @@ def test_star_without_colloid_does_not_need_q_and_eps(tmp_path):
     fn.Params(architecture="star", arms=20, ns=30, q=1.4, q2=2.2, eps=0.1, eps2=0.3, colloids=2,
               ncoll1=2, ncoll2=3, lbox=90.0),
     fn.Params(architecture="star", colloids=0, arms=10, ns=20, lbox=80.0),
+    fn.Params(architecture="star", colloid1=0, colloid2=1, arms=10, ns=20, lbox=80.0, q2=2.0, eps=0.1,
+              ncoll2=3),
+    fn.Params(architecture="bottlebrush", colloid1=0, colloid2=1, nb=30, ns=10, step=2, lbox=60.0,
+              eps=0.1, q2=2.0),
     fn.Params(architecture="bottlebrush", mode="local", nb=99, ns=50, step=3, lbox=120.0,
               eps=0.2, colloids=2, ncoll1=5, dcoll1=14.0, ncoll2=6, dcoll2=10.0, restart=1),
     fn.Params(architecture="bottlebrush", nb=99, ns=50, step=3, lbox=120.0, eps=0.1,
@@ -128,3 +132,35 @@ def test_distance_and_radius():
     """3-4-5 triangle and the star radius formula."""
     assert fn.distance([0, 0, 0], [3, 4, 0]) == 5.0
     assert fn.star_radius(1, 1) == pytest.approx(0.6)
+
+
+def test_each_colloid_species_is_independent(tmp_path):
+    """colloid1 / colloid2 choose species 1 only, species 2 only, both or none (star and bottlebrush)."""
+    star = "architecture star\nf 10\nns 50\nsigma 1\nlbox 100\nrestart 0\neps 0.2\n"
+    brush = "architecture bottlebrush\nnb 30\nns 8\nstep 3\nsigma 1\nlbox 60\nrestart 0\n"
+    path = tmp_path / "par.txt"
+    for base, extra in ((star, "q 1.8\nq2 2.6\n"), (brush, "")):
+        for c1, c2 in ((0, 0), (1, 0), (0, 1), (1, 1)):
+            path.write_text(base + extra + "colloid1 {}\ncolloid2 {}\n".format(c1, c2))
+            p = fn.read_par(str(path))
+            assert p.present == (c1, c2)
+            assert [i for i, _, _ in p.species()] == [i for i, on in ((1, c1), (2, c2)) if on]
+            assert p.n_species == (2 if c2 else 1 if c1 else 0)      # declared types stay contiguous
+    # a star needs q only for the species that is present
+    path.write_text(star + "q2 2.6\ncolloid1 0\ncolloid2 1\n")
+    assert fn.read_par(str(path)).q is None
+    path.write_text(star + "q 1.8\ncolloid1 1\ncolloid2 1\n")
+    with pytest.raises(KeyError, match="q2"):
+        fn.read_par(str(path))
+    path.write_text(star + "q 1.8\ncolloid1 3\n")
+    with pytest.raises(ValueError, match="colloid1"):
+        fn.read_par(str(path))
+
+
+def test_legacy_colloids_key_still_understood(tmp_path):
+    """colloids 0/1/2 (number of species) maps to colloid1 / colloid2."""
+    path = tmp_path / "par.txt"
+    for n, flags in ((0, (0, 0)), (1, (1, 0)), (2, (1, 1))):
+        path.write_text("architecture bottlebrush\ncolloids {}\nnb 30\nns 8\nstep 3\nsigma 1\n"
+                        "lbox 60\nrestart 0\n".format(n))
+        assert fn.read_par(str(path)).present == flags

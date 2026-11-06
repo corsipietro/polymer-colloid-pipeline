@@ -34,7 +34,8 @@ from launcher import RUN_FILES, start_simulation
 
 ARCHITECTURE = "star"       # "star" or "bottlebrush"
 MODE = "cluster"            # "cluster" (PBS queue) or "local" (this machine)
-COLLOIDS = 1                # colloid species: 0 = polymer alone, 1 = one species, 2 = two species
+COLLOID1 = 1                # colloid species 1 present (1) or not (0)
+COLLOID2 = 0                # colloid species 2 present (1) or not (0); both 0 = polymer alone
 SIGMA = 1                   # monomer diameter
 NS = [100]                  # monomers per arm / per side chain
 
@@ -42,7 +43,7 @@ NS = [100]                  # monomers per arm / per side chain
 ARMS = [50]                                   # arms per star (f)
 RATIO = [1.4, 1.8, 2.2, 2.6, 3.0, 3.4, 3.8]   # q = star radius / colloid radius (species 1)
 EPS_STAR = [0.05, 0.1, 0.15, 0.2, 0.25]       # colloid-monomer attraction strength
-RATIO2 = [2.6]                                # q2, species 2 (used only if COLLOIDS = 2)
+RATIO2 = [2.6]                                # q2, species 2 (used only if COLLOID2 = 1)
 NCOLL_STAR = (1, 1)                           # colloids of species 1 and 2
 PHI = 0.001                                   # volume fraction -> sets the box size
 RCORE = 2.25                                  # core radius (1.75 cannot fit f=50; needs >= 2.0)
@@ -74,31 +75,32 @@ def box_length(arms, ns, q, phi=PHI):
 
 def scan_runs(mode):
     """Yield ``(relative_path, Params)`` for every point of the configured scan."""
-    n = COLLOIDS
-    if n not in (0, 1, 2):
-        raise ValueError("COLLOIDS must be 0, 1 or 2")
-    common = dict(mode=mode, colloids=n, sigma=SIGMA, restart=0)
+    one, two = COLLOID1, COLLOID2
+    common = dict(mode=mode, colloid1=one, colloid2=two, sigma=SIGMA, restart=0)
+    any_colloid = bool(one or two)
     if ARCHITECTURE == "star":
-        epss = EPS_STAR if n else [None]
-        qs = RATIO if n >= 1 else [None]
-        q2s = RATIO2 if n >= 2 else [None]
+        epss = EPS_STAR if any_colloid else [None]
+        qs = RATIO if one else [None]
+        q2s = RATIO2 if two else [None]
         for arms, ns, eps, q, q2 in itertools.product(ARMS, NS, epss, qs, q2s):
             parts = ["f_{}".format(arms), "ns_{}".format(ns)]
-            if n >= 1:
-                parts += ["eps_{}".format(eps), "q_{}".format(q)]
-            if n >= 2:
+            if any_colloid:
+                parts.append("eps_{}".format(eps))
+            if one:
+                parts.append("q_{}".format(q))
+            if two:
                 parts.append("q2_{}".format(q2))
+            lbox = box_length(arms, ns, q if one else (q2 if two else None))
             yield os.path.join(*parts), Params(
                 architecture="star", arms=arms, ns=ns, q=q, q2=q2, eps=eps,
-                lbox=box_length(arms, ns, q), rcore=RCORE,
-                ncoll1=NCOLL_STAR[0], ncoll2=NCOLL_STAR[1], **common)
+                lbox=lbox, rcore=RCORE, ncoll1=NCOLL_STAR[0], ncoll2=NCOLL_STAR[1], **common)
     elif ARCHITECTURE == "bottlebrush":
-        epss = EPS_BBRUSH if n else [None]
-        qs = RATIO_BBRUSH if (n >= 1 and RATIO_BBRUSH) else [None]
-        q2s = RATIO2_BBRUSH if (n >= 2 and RATIO2_BBRUSH) else [None]
+        epss = EPS_BBRUSH if any_colloid else [None]
+        qs = RATIO_BBRUSH if (one and RATIO_BBRUSH) else [None]
+        q2s = RATIO2_BBRUSH if (two and RATIO2_BBRUSH) else [None]
         for nb, ns, step, eps, q, q2 in itertools.product(NB, NS, STEP, epss, qs, q2s):
             parts = ["nb_{}".format(nb), "ns_{}".format(ns), "step_{}".format(step)]
-            if n >= 1:
+            if any_colloid:
                 parts.append("eps_{}".format(eps))
             if q is not None:
                 parts.append("q_{}".format(q))

@@ -3,7 +3,8 @@
 """Build the LAMMPS data file ``star.dat`` for a star polymer (+ optional colloids).
 
 Atom types:  1 = arm monomer, 2 = star core (anchor), 3 = colloids of species 1,
-4 = colloids of species 2 (only the species that are present).
+4 = colloids of species 2 (only the species that are present; types are declared
+contiguously, so species 2 alone still declares the unused type 3).
 Bond types:  1 = monomer-monomer, 2 = core-first monomer of an arm.
 The core sits at the box centre, the arms are straight rays whose directions
 are drawn at random on the sphere with a minimum separation, and the colloids

@@ -31,14 +31,18 @@ sys.exit(subprocess.call(lmp + ["-in", infile]))
 
 BASE = "sigma 1\nrestart 0\nseed 3\n"
 RUNS = {
-    "star_alone": "architecture star\ncolloids 0\nf 8\nns 15\nlbox 50\n",
-    "star_one_colloid": "architecture star\ncolloids 1\nf 8\nns 15\nlbox 50\nq 1.8\neps 0.2\n",
-    "star_two_species": "architecture star\ncolloids 2\nf 8\nns 15\nlbox 70\nq 1.8\nq2 2.6\n"
-                        "eps 0.2\nncoll1 1\nncoll2 2\n",
-    "bbrush_alone": "architecture bottlebrush\ncolloids 0\nnb 30\nns 8\nstep 3\nlbox 60\n",
-    "bbrush_one_species_q": "architecture bottlebrush\ncolloids 1\nnb 30\nns 8\nstep 3\nlbox 60\n"
+    "star_alone": "architecture star\ncolloid1 0\ncolloid2 0\nf 8\nns 15\nlbox 50\n",
+    "star_one_colloid": "architecture star\ncolloid1 1\ncolloid2 0\nf 8\nns 15\nlbox 50\nq 1.8\neps 0.2\n",
+    "star_two_species": "architecture star\ncolloid1 1\ncolloid2 1\nf 8\nns 15\nlbox 70\nq 1.8\n"
+                        "q2 2.6\neps 0.2\nncoll1 1\nncoll2 2\n",
+    "star_species2_only": "architecture star\ncolloid1 0\ncolloid2 1\nf 8\nns 15\nlbox 70\nq2 2.6\n"
+                          "eps 0.2\nncoll2 2\n",
+    "bbrush_alone": "architecture bottlebrush\ncolloid1 0\ncolloid2 0\nnb 30\nns 8\nstep 3\nlbox 60\n",
+    "bbrush_one_species_q": "architecture bottlebrush\ncolloid1 1\ncolloid2 0\nnb 30\nns 8\nstep 3\nlbox 60\n"
                             "eps 0.1\nncoll1 2\nq 2.0\n",
-    "bbrush_two_species": "architecture bottlebrush\ncolloids 2\nnb 30\nns 8\nstep 3\nlbox 60\n"
+    "bbrush_species2_only": "architecture bottlebrush\ncolloid1 0\ncolloid2 1\nnb 30\nns 8\nstep 3\n"
+                            "lbox 60\neps 0.1\nncoll2 3\ndcoll2 6\n",
+    "bbrush_two_species": "architecture bottlebrush\ncolloid1 1\ncolloid2 1\nnb 30\nns 8\nstep 3\nlbox 60\n"
                           "eps 0.1\nncoll1 3\ndcoll1 8\nncoll2 3\ndcoll2 6\n",
 }
 

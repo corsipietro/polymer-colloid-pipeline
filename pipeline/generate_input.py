@@ -9,7 +9,9 @@ Common interactions (LJ units, reduced temperature 1.0, NVT):
   * colloid-colloid: repulsive;
   * FENE bonds (k = 30 / s^2, R0 = 1.5 s).
 
-Zero, one or two colloid species (``colloids`` in par.txt; atom types 3 and 4).
+Each colloid species is optional on its own (``colloid1``, ``colloid2`` in par.txt;
+atom types 3 and 4), on top of the polymer, whose core/backbone (type 2) and arm
+monomers (type 1) are always present.
 Star: colloids of diameter ``2 rs / q`` (``rs`` = star radius, ``q`` = size ratio;
 ``q2`` for the second species), read from ``star.dat``; repulsion via shifted-force LJ.
 Bottlebrush: ``ncoll1`` / ``ncoll2`` colloids of the two species, inserted at random
@@ -30,6 +32,16 @@ import numpy as np
 
 from functions import check_file_number, read_par, star_colloid_diameters
 from generate_bottle_brush import brush_size, colloid_diameters
+
+
+def fill_absent(diameters):
+    """Replace the None diameters of a declared but absent colloid species.
+
+    Atom types must be contiguous, so asking for species 2 alone still declares type 3;
+    its pair coefficients are never used and just need a valid value.
+    """
+    known = [d for d in diameters if d is not None]
+    return [d if d is not None else known[0] for d in diameters]
 
 
 def species_eps(params):
@@ -112,7 +124,7 @@ def build_input_star(params, file_number, continue_run):
     out.append("pair_coeff 2 2 {0}1.0 {1} {2}\n".format(sf, 2 * r_core, CUT * 2 * r_core))
     if n_species:
         # Colloid diameters 2 rs / q and Lorentz mixing with the monomers and the core.
-        diameters = star_colloid_diameters(params)[:n_species]
+        diameters = fill_absent(star_colloid_diameters(params)[:n_species])
         epss = species_eps(params)
         for index, d in enumerate(diameters):
             atom_type = 3 + index

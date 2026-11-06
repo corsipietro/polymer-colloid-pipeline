@@ -35,7 +35,9 @@ DEFAULT_RCORE = 1.75          # star core radius
 DEFAULT_BBRUSH_EPS = 0.1      # bottlebrush: colloid-monomer attraction strength
 # Default number of colloids per species: one for the star, 40 for the bottlebrush.
 DEFAULT_NCOLL = {"star": 1, "bottlebrush": 40}
-DEFAULT_COLLOIDS = {"star": 1, "bottlebrush": 2}   # default number of colloid species
+# Which colloid species are present when par.txt does not say: the star has one colloid
+# (species 1), the bottlebrush the two species of the original in.bbrush.
+DEFAULT_PRESENT = {"star": (1, 0), "bottlebrush": (1, 1)}
 
 _STRING_KEYS = ("architecture", "mode")
 _COMMON_REQUIRED = ("ns", "sigma", "lbox", "restart")
@@ -55,9 +57,13 @@ class Params(object):
         sigma         monomer diameter (LJ units)
         lbox          edge of the cubic periodic box (``box`` = ``[lbox] * 3``)
         restart       1 to continue a previous run from its restart file
-        colloids      number of colloid species: 0 = the polymer alone, 1 = species 1,
-                      2 = species 1 and 2 (default: 1 for the star, 2 for the bottlebrush)
-        ncoll1/ncoll2 number of colloids of species 1 / 2 (atom types 3 / 4);
+        colloid1,     1/0: colloid species 1 (atom type 3) / species 2 (atom type 4) present or
+        colloid2      not, independently; both 0 = the polymer alone. The polymer itself has
+                      two particle species that are always there: core (star) or backbone
+                      (bottlebrush) = type 2, and arm / side-chain monomers = type 1.
+                      Defaults: star 1/0, bottlebrush 1/1. (``colloids=n`` is accepted as a
+                      shorthand: n = 0, 1, 2 sets colloid1 = n >= 1, colloid2 = n >= 2.)
+        ncoll1/ncoll2 number of colloids of species 1 / 2;
                       default 1 for the star, 40 for the bottlebrush
         eps, eps2     colloid-monomer attraction strength of species 1 / 2 (eps2 = eps if None)
         seed          optional integer seed (None = random)
@@ -73,7 +79,7 @@ class Params(object):
                       explicit diameters dcoll1, dcoll2 (defaults 14 and 10) are used
     """
 
-    _FIELDS = ("architecture", "mode", "ns", "sigma", "lbox", "restart", "colloids",
+    _FIELDS = ("architecture", "mode", "ns", "sigma", "lbox", "restart", "colloid1", "colloid2",
                "eps", "eps2", "seed", "arms", "q", "q2", "rcore", "nb", "step",
                "ncoll1", "dcoll1", "ncoll2", "dcoll2")
 
@@ -85,7 +91,7 @@ class Params(object):
         self.sigma = 1.0
         self.lbox = None
         self.restart = 0
-        self.colloids = None
+        self.colloid1 = self.colloid2 = None
         self.eps = None
         self.eps2 = None
         self.seed = None
@@ -98,9 +104,13 @@ class Params(object):
         self.ncoll1 = self.ncoll2 = None
         self.dcoll1, self.dcoll2 = 14.0, 10.0
         for key, value in kwargs.items():
-            if key not in self._FIELDS:
+            if key == "colloids":                   # shorthand: number of species
+                if value is not None:
+                    self.colloid1, self.colloid2 = int(value >= 1), int(value >= 2)
+            elif key not in self._FIELDS:
                 raise TypeError("unknown parameter: {}".format(key))
-            setattr(self, key, value)
+            else:
+                setattr(self, key, value)
 
     @property
     def box(self):
@@ -113,11 +123,21 @@ class Params(object):
         return ARCHITECTURES[self.architecture]
 
     @property
+    def present(self):
+        """``(colloid1, colloid2)`` as 0/1 flags, with the architecture defaults filled in."""
+        default = DEFAULT_PRESENT[self.architecture]
+        return (default[0] if self.colloid1 is None else self.colloid1,
+                default[1] if self.colloid2 is None else self.colloid2)
+
+    @property
     def n_species(self):
-        """Number of colloid species declared (0, 1 or 2)."""
-        if self.colloids is None:
-            return DEFAULT_COLLOIDS[self.architecture]
-        return self.colloids
+        """Highest colloid atom type index declared minus 2: 0, 1 or 2.
+
+        Atom types must be contiguous, so asking for species 2 alone still declares
+        type 3 (unused).
+        """
+        one, two = self.present
+        return 2 if two else (1 if one else 0)
 
     @property
     def counts(self):
@@ -125,7 +145,8 @@ class Params(object):
         default = DEFAULT_NCOLL[self.architecture]
         n1 = default if self.ncoll1 is None else self.ncoll1
         n2 = default if self.ncoll2 is None else self.ncoll2
-        return (n1 if self.n_species >= 1 else 0, n2 if self.n_species >= 2 else 0)
+        one, two = self.present
+        return (n1 if one else 0, n2 if two else 0)
 
     @property
     def n_colloids(self):
@@ -140,7 +161,12 @@ class Params(object):
         """Return a copy with some attributes changed."""
         new = Params(**dict((k, getattr(self, k)) for k in self._FIELDS))
         for key, value in changes.items():
-            setattr(new, key, value)
+            if key == "colloids":                   # shorthand: number of species
+                new.colloid1, new.colloid2 = int(value >= 1), int(value >= 2)
+            elif key not in self._FIELDS:
+                raise TypeError("unknown parameter: {}".format(key))
+            else:
+                setattr(new, key, value)
         return new
 
     def __eq__(self, other):
@@ -182,10 +208,11 @@ def read_par(path="par.txt"):
     The file holds one ``key value`` pair per line. Keys:
 
     * all: ``architecture`` (default star), ``mode`` (default cluster),
-      ``ns``, ``sigma``, ``lbox``, ``restart``, ``seed``, ``colloids`` (number of
-      colloid species 0/1/2; default 1 for the star, 2 for the bottlebrush),
-      ``ncoll1``, ``ncoll2`` (colloids per species), ``eps``, ``eps2``;
-    * star: ``f``; ``q`` and ``eps`` with one species, plus ``q2`` with two; optional ``rcore``;
+      ``ns``, ``sigma``, ``lbox``, ``restart``, ``seed``, ``colloid1``, ``colloid2``
+      (0/1, each colloid species present or not; default star 1/0, bottlebrush 1/1;
+      the legacy ``colloids`` = 0/1/2 is also understood), ``ncoll1``, ``ncoll2``
+      (colloids per species), ``eps``, ``eps2``;
+    * star: ``f``; ``eps``; ``q`` if species 1 is present, ``q2`` if species 2 is; optional ``rcore``;
     * bottlebrush: ``nb``, ``step``; ``eps`` (default 0.1); ``q`` / ``q2`` (size ratios)
       or the explicit diameters ``dcoll1`` / ``dcoll2`` (defaults 14 and 10).
 
@@ -212,15 +239,25 @@ def read_par(path="par.txt"):
         raise ValueError("{}: unknown mode '{}' (use one of: {})".format(
             path, mode, ", ".join(MODES)))
 
-    colloids = int(values["colloids"]) if "colloids" in values else None
-    if colloids is not None and colloids not in (0, 1, 2):
-        raise ValueError("{}: colloids must be 0, 1 or 2, got {}".format(path, colloids))
-    n_species = DEFAULT_COLLOIDS[architecture] if colloids is None else colloids
+    default = DEFAULT_PRESENT[architecture]
+    if "colloids" in values:                       # legacy shorthand: number of species
+        n = int(values["colloids"])
+        if n not in (0, 1, 2):
+            raise ValueError("{}: colloids must be 0, 1 or 2, got {}".format(path, n))
+        default = (int(n >= 1), int(n >= 2))
+    flags = []
+    for key, fallback in (("colloid1", default[0]), ("colloid2", default[1])):
+        flag = int(values[key]) if key in values else fallback
+        if flag not in (0, 1):
+            raise ValueError("{}: {} must be 0 or 1, got {}".format(path, key, flag))
+        flags.append(flag)
     required = _COMMON_REQUIRED + _REQUIRED[architecture]
     if architecture == "star":
-        if n_species >= 1:
-            required += ("q", "eps")
-        if n_species >= 2:
+        if flags[0] or flags[1]:
+            required += ("eps",)
+        if flags[0]:
+            required += ("q",)
+        if flags[1]:
             required += ("q2",)
     missing = [key for key in required if key not in values]
     if missing:
@@ -231,7 +268,7 @@ def read_par(path="par.txt"):
         return int(values[key]) if key in values else None
 
     params = Params(
-        architecture=architecture, mode=mode, colloids=n_species,
+        architecture=architecture, mode=mode, colloid1=flags[0], colloid2=flags[1],
         ns=int(values["ns"]), sigma=values["sigma"], lbox=values["lbox"],
         restart=int(values["restart"]), seed=optional_int("seed"),
         eps=values.get("eps"), eps2=values.get("eps2"),
@@ -253,25 +290,25 @@ def read_par(path="par.txt"):
 
 def write_par(path, params):
     """Write ``params`` to a ``par.txt`` file readable by :func:`read_par`."""
-    n = params.n_species
+    one, two = params.present
     lines = [("architecture", params.architecture), ("mode", params.mode),
-             ("colloids", n)]
+             ("colloid1", one), ("colloid2", two)]
     if params.architecture == "star":
         lines += [("f", params.arms), ("ns", params.ns), ("sigma", params.sigma),
-                  ("lbox", params.lbox)]
-        lines += [("rcore", params.rcore)]
+                  ("lbox", params.lbox), ("rcore", params.rcore)]
     else:
         lines += [("nb", params.nb), ("ns", params.ns), ("sigma", params.sigma),
                   ("step", params.step), ("lbox", params.lbox)]
-    if n >= 1:
+    if one or two:
         lines += [("eps", params.eps)]
+    if one:
         if params.ncoll1 is not None:
             lines += [("ncoll1", params.ncoll1)]
         if params.q is not None:
             lines += [("q", params.q)]
         elif params.architecture == "bottlebrush":
             lines += [("dcoll1", params.dcoll1)]
-    if n >= 2:
+    if two:
         if params.eps2 is not None:
             lines += [("eps2", params.eps2)]
         if params.ncoll2 is not None:

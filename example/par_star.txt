@@ -1,6 +1,7 @@
 architecture star
 mode cluster
-colloids 2
+colloid1 1
+colloid2 1
 f 50
 ns 100
 sigma 1

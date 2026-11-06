@@ -8,14 +8,26 @@ interacting with colloids** in a periodic box, using
 cluster. Two architectures are supported, chosen with the `architecture` key of
 `par.txt`:
 
-| `architecture` | polymer | colloids (optional: `colloids 0/1/2` species) |
+| `architecture` | polymer | colloids (each species optional: `colloid1`, `colloid2`) |
 |---|---|---|
 | `star` | `f` arms of `ns` monomers on a core bead | species 1 (diameter `2 rs / q`) and/or species 2 (`2 rs / q2`), `ncoll1` / `ncoll2` of each (default 1) |
 | `bottlebrush` | backbone of `nb` beads with a side chain of `ns` beads every `step` beads | species 1 and/or 2, `ncoll1` / `ncoll2` of each (default 40), sizes from `q`/`q2` or `dcoll1`/`dcoll2`, inserted at random |
 
-Both architectures can run **alone** (`colloids 0`), **with one colloid species** (`colloids 1`:
-species 1 only, atom type 3) or **with two** (`colloids 2`: types 3 and 4). `ncoll1 1` gives a single
-colloid.
+### Particle species
+
+| LAMMPS type | species | present |
+|---|---|---|
+| 2 | core (star) / backbone (bottlebrush) | always |
+| 1 | arm monomers (star) / side-chain monomers (bottlebrush) | always |
+| 3 | colloids, species 1 | if `colloid1 1` |
+| 4 | colloids, species 2 | if `colloid2 1` |
+
+The two colloid species are **independent options**, for both architectures: none (the polymer
+alone), only species 1, only species 2, or both. `ncoll1` / `ncoll2` set how many colloids each
+species has (`ncoll1 1` = a single colloid) and each species has its own size ratio (`q`, `q2`) and,
+if you want, attraction strength (`eps`, `eps2`). The species are kept apart in the analysis, so
+you can follow the core/backbone, the arms and each colloid species separately. (LAMMPS atom
+types start at 1.)
 
 Units are Lennard-Jones, temperature 1, Nosé–Hoover (NVT), FENE bonds.
 
@@ -56,8 +68,8 @@ One `key value` pair per line.
 |---|---|---|
 | `architecture` | all | `star` or `bottlebrush` (default `star`) |
 | `mode` | all | `cluster` (PBS queue, default) or `local` (this machine) |
-| `colloids` | all | number of colloid species: `0` polymer alone, `1` species 1, `2` species 1 and 2 (default: `1` for the star, `2` for the bottlebrush) |
-| `ncoll1`, `ncoll2` | with colloids | colloids of species 1 (type 3) / 2 (type 4) (defaults: 1 for the star, 40 for the bottlebrush) |
+| `colloid1`, `colloid2` | all | `1`/`0`: colloid species 1 / 2 present or not (defaults: star `1`/`0`, bottlebrush `1`/`1`) |
+| `ncoll1`, `ncoll2` | with colloids | colloids of species 1 / 2 (defaults: 1 for the star, 40 for the bottlebrush) |
 | `ns` | all | monomers per arm / per side chain |
 | `sigma` | all | monomer diameter |
 | `lbox` | all | edge of the cubic box |
@@ -65,14 +77,14 @@ One `key value` pair per line.
 | `seed` | all | *(optional)* integer seed; omit for a random one |
 | `eps`, `eps2` | with colloids | colloid–monomer attraction strength of species 1 / 2 (`eps2` defaults to `eps`; bottlebrush `eps` default 0.1) |
 | `f` | star | number of arms |
-| `q`, `q2` | star + colloids | size ratio star radius / colloid radius of species 1 / 2 (`q2` required with `colloids 2`) |
+| `q`, `q2` | star + colloids | size ratio star radius / colloid radius of species 1 / 2 (each required only if that species is present) |
 | `rcore` | star | *(optional, default 1.75)* core radius. Arms are placed by random sequential insertion: 1.75 fits at most ~42 arms, `f = 50` needs `>= 2.0`, `f = 60` `>= 2.25`; otherwise `generate_system.py` stops with an error |
 | `nb`, `step` | bottlebrush | backbone length and grafting spacing |
 | `q`, `q2` | bottlebrush + colloids | size ratio effective-star radius / colloid radius of species 1, 2 (replaces the diameter) |
 | `dcoll1`, `dcoll2` | bottlebrush + colloids | explicit diameters, used when `q` / `q2` is absent (defaults 14, 10) |
 
 Old `par.txt` files (without `architecture`) are read as star runs with one colloid. Note that
-for the bottlebrush `colloids 1` now means *one species*; the former behaviour (two species) is `colloids 2`.
+the legacy key `colloids 0/1/2` (number of species) is still understood: it sets `colloid1`, `colloid2`.
 Star colloids are placed at random, not overlapping each other and clear of the initial (straight-armed) star,
 so the box must be large enough (an error asks to increase `lbox`).
 The bottlebrush box must exceed `(nb + 2) sigma` along the backbone and
@@ -81,7 +93,7 @@ The bottlebrush box must exceed `(nb + 2) sigma` along the backbone and
 ## Running
 
 Configure the scan in the PARAMETERS block of `pipeline/cluster_submit.py`
-(architecture, mode, colloids, values to scan), then, from `pipeline/`:
+(architecture, mode, `COLLOID1` / `COLLOID2`, values to scan), then, from `pipeline/`:
 
 ```bash
 python3 cluster_submit.py --dry-run     # create the directories and par.txt, start nothing
@@ -172,8 +184,8 @@ python3 -m pytest -q                      # unit tests (LAMMPS tests are skipped
 LAMMPS_CMD=/path/to/lmp python3 -m pytest -q   # also runs short real LAMMPS simulations
 ```
 
-With LAMMPS available, `tests/test_lammps_smoke.py` runs 40000 steps of six variants
-(each architecture alone, with one species and with two species), checks the
+With LAMMPS available, `tests/test_lammps_smoke.py` runs 40000 steps of eight variants
+(each architecture alone, with species 1 only, species 2 only, and with both), checks the
 temperature, and runs the analysis. The radius of gyration computed by `post_processing.py`
 agrees with LAMMPS' `compute gyration` frame by frame. Tested with LAMMPS 22 Jul 2025
 (the cluster scripts were written for 22 Aug 2018).

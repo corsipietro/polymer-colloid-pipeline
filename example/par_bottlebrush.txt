@@ -1,6 +1,7 @@
 architecture bottlebrush
 mode local
-colloids 1
+colloid1 1
+colloid2 0
 nb 99
 ns 50
 sigma 1
