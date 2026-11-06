@@ -41,6 +41,30 @@ def set_anchors(step, nb):
     return anchors, nb
 
 
+def effective_star_radius(nb, ns, step):
+    """Return the radius ``rc`` of the effective star of the brush.
+
+    ``rc = 0.5 * ns**0.588 * feq**(1/5)`` with ``feq = (g * ns)**0.588`` and ``g``
+    the grafting density (side chains per backbone monomer).
+    """
+    nb, nbrush, _ = brush_size(nb, ns, step)
+    feq = (nbrush / nb * ns) ** 0.588
+    return 0.5 * ns ** 0.588 * feq ** (1 / 5)
+
+
+def colloid_diameters(params):
+    """Return the diameters ``(d1, d2)`` of the two colloid species.
+
+    A species whose size ratio ``q`` (``q`` for species 1, ``q2`` for species 2) is
+    set has diameter ``2 * rc / q`` (``rc`` = effective-star radius, so ``q`` is the
+    polymer/colloid size ratio); otherwise the explicit ``dcoll1`` / ``dcoll2`` are used.
+    """
+    rc = effective_star_radius(params.nb, params.ns, params.step)
+    d1 = 2 * rc / params.q if params.q is not None else params.dcoll1
+    d2 = 2 * rc / params.q2 if params.q2 is not None else params.dcoll2
+    return d1, d2
+
+
 def check_box(nb, ns, sigma, box):
     """Raise ValueError if the straight brush does not fit in the periodic box."""
     if box[1] <= (nb + 2) * sigma:

@@ -10,7 +10,7 @@ directory::
     python3 cluster_submit.py --dry-run        # only create directories and par.txt
 
 Star scan:        <tag>/f_<f>/ns_<ns>/[eps_<eps>/q_<q>/]
-Bottlebrush scan: <tag>/nb_<nb>/ns_<ns>/step_<step>/[eps_<eps>/]
+Bottlebrush scan: <tag>/nb_<nb>/ns_<ns>/step_<step>/[eps_<eps>/[q_<q>/]]
 Each run directory gets its own ``par.txt`` and a copy of the scripts.
 
 In local mode the simulations are started in the background; run one scan point
@@ -50,8 +50,11 @@ NB = [99]                   # backbone monomers
 STEP = [3]                  # backbone monomers between side chains
 EPS_BBRUSH = [0.1]          # colloid-monomer attraction strength
 LBOX_BBRUSH = 120           # box edge (must exceed nb*sigma and 2*ns*sigma)
-NCOLL = (40, 40)            # number of colloids of the two species
-DCOLL = (14.0, 10.0)        # their diameters
+NCOLL = (40, 40)            # number of colloids of the two species (0 = species absent)
+DCOLL = (14.0, 10.0)        # their diameters, used when RATIO_BBRUSH is empty
+RATIO_BBRUSH = []           # size ratios q = effective-star radius / colloid radius of species 1;
+                            # if not empty they replace DCOLL[0] (diameter = 2 rc / q); species 2
+                            # keeps DCOLL[1]
 
 ############################
 
@@ -80,12 +83,15 @@ def scan_runs(mode):
                 rcore=RCORE, **common)
     elif ARCHITECTURE == "bottlebrush":
         epss = EPS_BBRUSH if COLLOIDS else [None]
-        for nb, ns, step, eps in itertools.product(NB, NS, STEP, epss):
+        qs = RATIO_BBRUSH if (COLLOIDS and RATIO_BBRUSH) else [None]
+        for nb, ns, step, eps, q in itertools.product(NB, NS, STEP, epss, qs):
             parts = ["nb_{}".format(nb), "ns_{}".format(ns), "step_{}".format(step)]
             if COLLOIDS:
                 parts.append("eps_{}".format(eps))
+            if q is not None:
+                parts.append("q_{}".format(q))
             yield os.path.join(*parts), Params(
-                architecture="bottlebrush", nb=nb, ns=ns, step=step, eps=eps,
+                architecture="bottlebrush", nb=nb, ns=ns, step=step, eps=eps, q=q,
                 lbox=LBOX_BBRUSH, ncoll1=NCOLL[0], ncoll2=NCOLL[1],
                 dcoll1=DCOLL[0], dcoll2=DCOLL[1], **common)
     else:

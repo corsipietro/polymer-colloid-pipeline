@@ -57,15 +57,20 @@ class Params(object):
         seed          optional integer seed (None = random)
     Star only:
         arms          number of arms f
-        q             star radius / colloid radius
+        q             size ratio polymer / colloid: star radius over colloid radius
+                      (star); for the bottlebrush see ``q`` below
         rcore         core radius (1.75 fits at most ~42 arms; f=50 needs >= 2.0)
     Bottlebrush only:
         nb, step      backbone length and grafting spacing (one side chain every ``step``)
-        ncoll1, dcoll1, ncoll2, dcoll2   number and diameter of the two colloid species
+        ncoll1, ncoll2   number of colloids of the two species (type 3 and 4)
+        q, q2         size ratio effective-star radius / colloid radius of species 1
+                      and 2 (see ``generate_bottle_brush.colloid_diameters``); if
+                      absent, the explicit diameters dcoll1, dcoll2 are used
+        dcoll1, dcoll2   explicit colloid diameters (defaults 14 and 10)
     """
 
     _FIELDS = ("architecture", "mode", "ns", "sigma", "lbox", "restart", "colloids",
-               "eps", "seed", "arms", "q", "rcore", "nb", "step",
+               "eps", "seed", "arms", "q", "q2", "rcore", "nb", "step",
                "ncoll1", "dcoll1", "ncoll2", "dcoll2")
 
     def __init__(self, **kwargs):
@@ -81,6 +86,7 @@ class Params(object):
         self.seed = None
         self.arms = None
         self.q = None
+        self.q2 = None
         self.rcore = DEFAULT_RCORE
         self.nb = None
         self.step = None
@@ -137,7 +143,8 @@ def read_par(path="par.txt"):
       ``ns``, ``sigma``, ``lbox``, ``restart``, ``colloids`` (default 1), ``seed``;
     * star: ``f``, and, if colloids are present, ``q`` and ``eps``; optional ``rcore``;
     * bottlebrush: ``nb``, ``step``; optional ``eps`` (default 0.1), ``ncoll1``,
-      ``dcoll1``, ``ncoll2``, ``dcoll2``.
+      ``dcoll1``, ``ncoll2``, ``dcoll2``, or ``q`` / ``q2`` (size ratios) instead of
+      the diameters.
 
     Files written before the ``architecture`` key existed are read as star runs.
 
@@ -189,6 +196,8 @@ def read_par(path="par.txt"):
         params.step = int(values["step"])
         if params.eps is None:
             params.eps = DEFAULT_BBRUSH_EPS
+        params.q = values.get("q")
+        params.q2 = values.get("q2")
         params.ncoll1 = int(values.get("ncoll1", params.ncoll1))
         params.dcoll1 = values.get("dcoll1", params.dcoll1)
         params.ncoll2 = int(values.get("ncoll2", params.ncoll2))
@@ -211,8 +220,9 @@ def write_par(path, params):
                   ("step", params.step), ("lbox", params.lbox)]
         if params.colloids:
             lines += [("eps", params.eps), ("ncoll1", params.ncoll1),
-                      ("dcoll1", params.dcoll1), ("ncoll2", params.ncoll2),
-                      ("dcoll2", params.dcoll2)]
+                      ("ncoll2", params.ncoll2)]
+            lines += [("q", params.q) if params.q is not None else ("dcoll1", params.dcoll1)]
+            lines += [("q2", params.q2) if params.q2 is not None else ("dcoll2", params.dcoll2)]
     lines += [("restart", params.restart)]
     if params.seed is not None:
         lines += [("seed", params.seed)]

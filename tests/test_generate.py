@@ -100,6 +100,7 @@ def test_star_without_colloid():
     assert "2 atom types" in text and all(t != 3 for t, _ in atoms.values())
     params = fn.Params(arms=4, ns=3, lbox=40.0, colloids=0)
     inp = gi.build_input(params, 0, False)
+    assert "pair_style lj/sf" in inp and "hybrid" not in inp
     assert "type 3" not in inp and "pair_coeff 1 3" not in inp and "velocity coll" not in inp
 
 
@@ -157,3 +158,17 @@ def test_bbrush_input_restart_and_no_colloids():
     assert "gyr_all_2.txt" in text and "bbrush_2.lammpstrj" in text
     bare = gi.build_input(params.replace(colloids=0), 0, False)
     assert "create_atoms" not in bare and "pair_coeff 1 3" not in bare and "group bbone id 1:99" in bare
+
+
+def test_bbrush_colloid_size_from_q():
+    """With q, species 1 has diameter 2 rc / q (rc = effective-star radius); species 2 keeps dcoll2."""
+    params = fn.read_par(os.path.join(HERE, "data", "par_bbrush.txt")).replace(q=2.5, ncoll1=1, ncoll2=0)
+    rc = gb.effective_star_radius(99, 50, 3)
+    assert rc == pytest.approx(0.5 * 50 ** 0.588 * (50 / 3) ** (0.588 / 5) * 1.0, rel=1e-9)
+    d1, d2 = gb.colloid_diameters(params)
+    assert d1 == pytest.approx(2 * rc / 2.5) and d2 == 10.0
+    text = gi.build_input(params, 0, False, seeds=(1, 2))
+    assert "create_atoms 3 random 1 1 NULL" in text and "create_atoms 4" not in text
+    assert "pair_coeff 3 3 1.0 {0} ".format(d1) in text
+    bigger = gb.colloid_diameters(params.replace(q=1.25))[0]
+    assert bigger == pytest.approx(2 * d1)       # halving q doubles the colloid

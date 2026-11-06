@@ -28,7 +28,7 @@ import random
 import numpy as np
 
 from functions import check_file_number, read_par, star_radius
-from generate_bottle_brush import brush_size
+from generate_bottle_brush import brush_size, colloid_diameters
 
 # LJ energy scale of the FENE bonds and thermostat temperature.
 ENERGY = 1
@@ -92,10 +92,17 @@ def build_input_star(params, file_number, continue_run):
         out.append("neigh_modify check yes\n")
     out.append("\n")
 
-    out.append("pair_style hybrid lj/cut {0} lj/sf {1}\n".format(CUT * sigma, CUT * sigma))
-    out.append("pair_coeff 1 1 lj/sf 1.0 1.0 {}\n".format(CUT * sigma))
-    out.append("pair_coeff 1 2 lj/sf 1.0 {0} {1}\n".format(s_core, CUT * s_core))
-    out.append("pair_coeff 2 2 lj/sf 1.0 {0} {1}\n".format(2 * r_core, CUT * 2 * r_core))
+    # With a colloid the LJ flavours are mixed (hybrid); without it a single
+    # shifted-force LJ style is enough (LAMMPS rejects an unused hybrid sub-style).
+    if colloid:
+        out.append("pair_style hybrid lj/cut {0} lj/sf {1}\n".format(CUT * sigma, CUT * sigma))
+        sf = "lj/sf "
+    else:
+        out.append("pair_style lj/sf {}\n".format(CUT * sigma))
+        sf = ""
+    out.append("pair_coeff 1 1 {0}1.0 1.0 {1}\n".format(sf, CUT * sigma))
+    out.append("pair_coeff 1 2 {0}1.0 {1} {2}\n".format(sf, s_core, CUT * s_core))
+    out.append("pair_coeff 2 2 {0}1.0 {1} {2}\n".format(sf, 2 * r_core, CUT * 2 * r_core))
     if colloid:
         # Colloid diameter (twice its radius rs / q) and Lorentz mixing.
         sigma_colloid = 2 * (star_radius(arms, ns) / params.q)
@@ -178,8 +185,10 @@ def build_input_bbrush(params, file_number, continue_run, seeds):
     else:
         out.append("read_data bbrush.dat\n")
         if colloids:
-            out.append("create_atoms 3 random {0} {1} NULL\n".format(params.ncoll1, seeds[0]))
-            out.append("create_atoms 4 random {0} {1} NULL\n".format(params.ncoll2, seeds[1]))
+            if params.ncoll1:
+                out.append("create_atoms 3 random {0} {1} NULL\n".format(params.ncoll1, seeds[0]))
+            if params.ncoll2:
+                out.append("create_atoms 4 random {0} {1} NULL\n".format(params.ncoll2, seeds[1]))
     out.append("\n")
 
     out.append("################\n#   Settings   #\n################\n")
@@ -196,7 +205,7 @@ def build_input_bbrush(params, file_number, continue_run, seeds):
     out.append("pair_coeff 1 2 1.0 {}\n".format(sigma))
     out.append("pair_coeff 2 2 1.0 {}\n".format(sigma))
     if colloids:
-        d1, d2 = params.dcoll1, params.dcoll2
+        d1, d2 = colloid_diameters(params)
         for atom_type, diameter in ((3, d1), (4, d2)):
             mixed = np.mean([sigma, diameter])
             for bead in (1, 2):

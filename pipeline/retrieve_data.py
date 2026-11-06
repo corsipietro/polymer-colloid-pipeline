@@ -31,6 +31,8 @@ def run_label(params):
         parts = [params.ns, params.nb, params.step]
         if params.colloids:
             parts.append(params.eps)
+            if params.q is not None:
+                parts.append(params.q)
     return "_".join(str(p) for p in parts)
 
 

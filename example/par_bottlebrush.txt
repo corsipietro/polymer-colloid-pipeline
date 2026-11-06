@@ -7,8 +7,7 @@ sigma 1
 step 3
 lbox 120
 eps 0.1
-ncoll1 40
-dcoll1 14
-ncoll2 40
-dcoll2 10
+ncoll1 1
+ncoll2 0
+q 2.5
 restart 0

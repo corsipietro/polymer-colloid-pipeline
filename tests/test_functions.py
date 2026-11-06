@@ -52,6 +52,8 @@ def test_star_without_colloid_does_not_need_q_and_eps(tmp_path):
     fn.Params(architecture="star", colloids=0, arms=10, ns=20, lbox=80.0),
     fn.Params(architecture="bottlebrush", mode="local", nb=99, ns=50, step=3, lbox=120.0,
               eps=0.2, ncoll1=5, dcoll1=14.0, ncoll2=6, dcoll2=10.0, restart=1),
+    fn.Params(architecture="bottlebrush", nb=99, ns=50, step=3, lbox=120.0, eps=0.1,
+              ncoll1=1, ncoll2=0, q=2.5, q2=1.5),
     fn.Params(architecture="bottlebrush", colloids=0, nb=30, ns=10, step=2, lbox=60.0, eps=0.1),
 ])
 def test_write_par_roundtrip(tmp_path, params):
