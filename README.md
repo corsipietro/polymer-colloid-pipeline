@@ -114,9 +114,13 @@ Two-column histograms `x y` plus tables; the first frame of every trajectory fil
 
 * **star**: `mon_distr_anch`, `mon_distr_cm`, `rg`, and with a colloid `coll_distr_anch`,
   `coll_distr_anch_2rg`, `coll_distr_cm`, `loading.txt` (colloid within `rs` / `2 rs` per frame).
-* **bottlebrush**: `mon_distr_cm`, `rg`, `end_to_end.txt` (end-to-end distance and radii of
-  gyration per frame) and with colloids `coll_a_distr_cm`, `coll_b_distr_cm`. This analysis was
-  written for the refactoring; the original bottlebrush analysis scripts were not available.
+* **bottlebrush**: `density_profile.txt` (side-chain atoms vs distance from their anchor,
+  orthogonal and parallel to the local backbone), `coll_dist_nnorm.txt` and `coll_dist.txt`
+  (colloid distance from the backbone, from the closest "effective star" and from the brush
+  centre of mass; raw counts and normalised by cylindrical/spherical shells; `_b` files for the
+  second colloid species) and `end_to_end.txt` (end-to-end distance and radii of gyration per frame).
+  An effective star is a block of `n = round(0.5 ns (sigma ns)^(3/5) / (1 + sigma ns))`
+  consecutive backbone atoms with their side chains.
 
 LAMMPS also writes `gyration/gyr_all_<n>.txt` (and `gyr_bbone_<n>.txt`,
 `bbone_extremes_<n>.lammpstrj` for the bottlebrush).
@@ -134,6 +138,10 @@ vmd -lammpstrj configurations/star_0.lammpstrj
 Atom types are 1 = monomer (side chain), 2 = core / backbone, 3 and 4 = colloids.
 VMD draws all atoms with the same size by default: set the radius per type
 (e.g. in *Graphics → Representations → VDW*, selection `type 3`) to see the colloid diameters.
+
+## License
+
+BSD 3-Clause, see `LICENSE`.
 
 ## Requirements and tests
 

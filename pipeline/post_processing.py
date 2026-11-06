@@ -20,18 +20,18 @@ the colloid files are written only if the run has a colloid):
 ``rs`` is the star radius ``0.6 * f**(1/5) * ns**0.588``. Distances use the
 minimum image convention relative to the core.
 
-BOTTLEBRUSH output files (new analysis, not the original one, which is lost):
+BOTTLEBRUSH output files (the analysis of the original scripts; colloids optional):
+  density_profile.txt   side-chain atoms vs distance from their anchor, orthogonal
+                        and parallel to the local backbone direction (counts per frame)
+  coll_dist_nnorm.txt   histogram of the colloid distance from the backbone (cylinder),
+                        from the closest "effective star" and from the brush centre of mass
+  coll_dist.txt         same, normalised (cylindrical / spherical shells)
+  coll_dist_b*.txt      same for the second colloid species (type 4)
   end_to_end.txt        per frame: backbone end-to-end distance, backbone Rg, brush Rg
-  rg                    distribution of the brush radius of gyration
-  mon_distr_cm          bead distance from the centre of mass of the brush
-  coll_a_distr_cm       distance of the colloids of species 1 (type 3) from it
-  coll_b_distr_cm       same for species 2 (type 4)
-Positions are unwrapped around the backbone centre of mass, which assumes that
-the brush is smaller than half the box.
-
-Usage (from a run directory)::
-
-    python3 post_processing.py
+An "effective star" is a group of n consecutive backbone atoms with their side
+chains, n = round(0.5 ns (sigma ns)^(3/5) / (1 + sigma ns)). Positions are unwrapped
+around the backbone centre of mass, which assumes that the brush is smaller than
+half the box.
 """
 
 import os
@@ -39,6 +39,7 @@ import os
 import numpy as np
 
 from functions import create_dir, read_par, star_radius
+from generate_bottle_brush import set_anchors
 
 # Lines of the header that precedes the atoms of every LAMMPS dump frame.
 HEADER_LINES = 9
@@ -230,71 +231,168 @@ def analyse_star(config_dir, params):
     return hist, tables
 
 
-def bbrush_observables(frame, lbox):
+class BrushLayout(object):
+    """Atom-id bookkeeping of a bottlebrush, derived from ``par.txt``.
+
+    Attributes:
+        nb: number of backbone atoms (ids 1..nb).
+        anchors: backbone ids carrying a side chain.
+        side: dict anchor -> list of the ids of its side-chain atoms.
+        groups: list of ``(ids)`` arrays, one per "effective star": the backbone
+            atoms ``k*n .. k*n+n-1`` (n = :attr:`blob_size`) with their side chains.
+    """
+
+    def __init__(self, params):
+        """Compute anchors, side-chain ids and effective stars."""
+        anchors, nb = set_anchors(params.step, params.nb)
+        ns, sigma = params.ns, params.sigma
+        self.nb = nb
+        self.anchors = anchors
+        self.side = {}
+        for index, anchor in enumerate(anchors):
+            first = nb + 1 + index * ns
+            self.side[anchor] = list(range(first, first + ns))
+        # Number of backbone monomers in an effective star.
+        self.blob_size = max(1, int(round(0.5 * ns * (sigma * ns) ** (3 / 5) / (1 + sigma * ns))))
+        self.groups = []
+        for k in range(int(round(nb / self.blob_size)) + 1):
+            ids = []
+            for i in range(k * self.blob_size, k * self.blob_size + self.blob_size):
+                if 1 <= i <= nb:
+                    ids.append(i)
+                    ids.extend(self.side.get(i, []))
+            if ids:
+                self.groups.append(np.array(ids))
+
+
+def bbrush_frame(frame, lbox, layout):
     """Compute the per-frame quantities of a bottlebrush.
+
+    Atoms are unwrapped to their periodic image closest to the backbone centre
+    of mass (the backbone is first made continuous bond by bond), which assumes
+    that the brush is smaller than half the box.
 
     Args:
         frame: ``(natoms, 5)`` array ``id type x y z`` (types: 1 side chain,
-            2 backbone, 3 and 4 colloids).
+            2 backbone, 3 and 4 colloid species).
         lbox: edge of the cubic periodic box.
+        layout: :class:`BrushLayout`.
 
     Returns:
-        dict with ``ree`` (backbone end-to-end distance), ``rg_backbone``,
-        ``rg`` (whole brush, types 1 and 2) and the distance arrays
-        ``mon_cm``, ``coll_a_cm``, ``coll_b_cm`` from the brush centre of mass.
+        dict with ``ree`` (backbone end-to-end distance), ``rg_backbone``, ``rg``
+        (brush, types 1 and 2); ``par`` and ``ort`` (distance of every side-chain
+        atom from its anchor, parallel and orthogonal to the local backbone
+        direction); and, for each colloid species present (``"a"`` = type 3,
+        ``"b"`` = type 4), the distance arrays ``cyl`` (closest backbone atom),
+        ``eff`` (closest effective-star centre) and ``cm`` (brush centre of mass).
     """
+    frame = frame[np.argsort(frame[:, 0])]
     types = frame[:, 1].astype(int)
-    backbone = frame[types == TYPE_BB_BACKBONE]
-    backbone = backbone[np.argsort(backbone[:, 0])][:, 2:5]
+    xyz = frame[:, 2:5]
+    nb = layout.nb
 
-    # Follow the backbone bond by bond so that it is continuous across the box.
-    steps = np.diff(backbone, axis=0)
+    steps = np.diff(xyz[:nb], axis=0)
     steps -= lbox * np.round(steps / lbox)
-    chain = backbone[0] + np.vstack([np.zeros(3), np.cumsum(steps, axis=0)])
+    chain = xyz[0] + np.vstack([np.zeros(3), np.cumsum(steps, axis=0)])
     cm_backbone = chain.mean(axis=0)
-
-    # Unwrap every atom to its periodic image closest to the backbone centre.
-    delta = frame[:, 2:5] - cm_backbone
+    delta = xyz - cm_backbone
     delta -= lbox * np.round(delta / lbox)
     xyz = cm_backbone + delta
 
+    backbone = xyz[:nb]
     brush = xyz[(types == TYPE_BB_SIDE) | (types == TYPE_BB_BACKBONE)]
     cm = brush.mean(axis=0)
-    return {
-        "ree": float(np.linalg.norm(chain[-1] - chain[0])),
-        "rg_backbone": float(np.sqrt(np.mean(np.sum((chain - cm_backbone) ** 2, axis=1)))),
+
+    parallel, orthogonal = [], []
+    for anchor in layout.anchors:
+        i = anchor - 1
+        bone = xyz[i + 1] - xyz[i] if anchor != nb else xyz[i] - xyz[i - 1]
+        arm = xyz[np.array(layout.side[anchor]) - 1] - xyz[i]
+        proj = arm.dot(bone) / bone.dot(bone)
+        parallel.extend(np.abs(proj) * np.linalg.norm(bone))
+        orthogonal.extend(np.linalg.norm(arm - np.outer(proj, bone), axis=1))
+
+    result = {
+        "ree": float(np.linalg.norm(backbone[-1] - backbone[0])),
+        "rg_backbone": float(np.sqrt(np.mean(np.sum((backbone - backbone.mean(axis=0)) ** 2, axis=1)))),
         "rg": float(np.sqrt(np.mean(np.sum((brush - cm) ** 2, axis=1)))),
-        "mon_cm": np.linalg.norm(brush - cm, axis=1),
-        "coll_a_cm": np.linalg.norm(xyz[types == TYPE_BB_COLL_A] - cm, axis=1),
-        "coll_b_cm": np.linalg.norm(xyz[types == TYPE_BB_COLL_B] - cm, axis=1),
+        "par": np.array(parallel),
+        "ort": np.array(orthogonal),
     }
+    centres = np.array([xyz[ids - 1].mean(axis=0) for ids in layout.groups])
+    for species, atom_type in (("a", TYPE_BB_COLL_A), ("b", TYPE_BB_COLL_B)):
+        colloids = xyz[types == atom_type]
+        if len(colloids):
+            result[species] = {
+                "cyl": np.linalg.norm(colloids[:, None, :] - backbone[None, :, :], axis=2).min(axis=1),
+                "eff": np.linalg.norm(colloids[:, None, :] - centres[None, :, :], axis=2).min(axis=1),
+                "cm": np.linalg.norm(colloids - cm, axis=1),
+            }
+    return result
 
 
 def analyse_bbrush(config_dir, params):
-    """Process the trajectories of a bottlebrush run (see :func:`analyse_star`)."""
+    """Process the trajectories of a bottlebrush run (see :func:`analyse_star`).
+
+    Writes (as tables): ``density_profile`` (side-chain atoms vs distance
+    parallel/orthogonal to the backbone, counts per frame), ``end_to_end`` and,
+    for each colloid species present, the colloid distance distributions
+    ``coll_dist_nnorm`` / ``coll_dist`` (species a, type 3) and
+    ``coll_dist_nnorm_b`` / ``coll_dist_b`` (species b, type 4).
+    """
     lbox = params.box[0]
-    colloid = bool(params.colloids)
-    hist = {"mon_distr_cm": Histogram(lbox / 2, 150)}
-    if colloid:
-        hist["coll_a_distr_cm"] = Histogram(lbox, int(round(lbox * 2)))
-        hist["coll_b_distr_cm"] = Histogram(lbox, int(round(lbox * 2)))
-    rgs = []
+    layout = BrushLayout(params)
+    nb = layout.nb
+    bins = np.linspace(0, nb, 2 * nb + 1)
+    width = bins[1] - bins[0]
+    x = 0.5 * (bins[:-1] + bins[1:])
+
+    hist_ort = np.zeros(2 * nb)
+    hist_par = np.zeros(2 * nb)
+    dists = {"a": {"cyl": [], "eff": [], "cm": []}, "b": {"cyl": [], "eff": [], "cm": []}}
+    n_coll = {"a": 0, "b": 0}
     rows = []
+    counter = 0
 
-    for index, frame in enumerate(trajectory_frames(config_dir, "bbrush")):
-        obs = bbrush_observables(frame, lbox)
-        hist["mon_distr_cm"].add(obs["mon_cm"])
-        if colloid:
-            hist["coll_a_distr_cm"].add(obs["coll_a_cm"])
-            hist["coll_b_distr_cm"].add(obs["coll_b_cm"])
-        rgs.append(obs["rg"])
-        rows.append((index, obs["ree"], obs["rg_backbone"], obs["rg"]))
+    for frame in trajectory_frames(config_dir, "bbrush"):
+        obs = bbrush_frame(frame, lbox, layout)
+        hist_ort += np.histogram(obs["ort"], bins=bins)[0]
+        hist_par += np.histogram(obs["par"], bins=bins)[0]
+        for species in ("a", "b"):
+            if species in obs:
+                n_coll[species] = len(obs[species]["cm"])
+                for kind in ("cyl", "eff", "cm"):
+                    dists[species][kind].extend(obs[species][kind])
+        rows.append((counter, obs["ree"], obs["rg_backbone"], obs["rg"]))
+        counter += 1
 
-    if not rgs:
+    if counter == 0:
         raise RuntimeError("no frames found in {}".format(config_dir))
-    hist["rg"] = Histogram(lbox / 2, 200)
-    hist["rg"].add(rgs)
-    return hist, {"end_to_end": ("frame ree rg_backbone rg", rows)}
+
+    tables = {
+        "density_profile": ("x  ort  par", list(zip(x, hist_ort / counter, hist_par / counter))),
+        "end_to_end": ("frame ree rg_backbone rg", rows),
+    }
+    n_eff = len(layout.groups)
+    for species, suffix in (("a", ""), ("b", "_b")):
+        if not n_coll[species]:
+            continue
+        number = counter * n_coll[species]
+        counts = dict((k, np.histogram(v, bins=bins)[0]) for k, v in dists[species].items())
+        tables["coll_dist_nnorm" + suffix] = (
+            "x    y_cyl   y_eff   y_cm    counter",
+            [(xi, c, e, m, counter) for xi, c, e, m in
+             zip(x, counts["cyl"], counts["eff"], counts["cm"])])
+        # Cylindrical shell (2 pi r dr) for the distance to the backbone, spherical
+        # shell (4 pi r^2 dr) for the distances to the effective stars and to the
+        # brush centre of mass; the first two are also divided by the number of
+        # effective stars. -log(g(r)) is the effective potential.
+        y_cyl = counts["cyl"] / (n_eff * number * 2 * np.pi * width) / x
+        y_eff = counts["eff"] / (4 * np.pi * width * n_eff * number) / x ** 2
+        y_cm = counts["cm"] / (4 * np.pi * width * number) / x ** 2
+        tables["coll_dist" + suffix] = (
+            "x    y_cyl   y_eff   y_cm", list(zip(x, y_cyl, y_eff, y_cm)))
+    return {}, tables
 
 
 def analyse(config_dir, params):

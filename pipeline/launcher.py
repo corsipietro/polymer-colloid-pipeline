@@ -23,7 +23,7 @@ from functions import MODES
 RUN_FILES = ["run_simulation.py", "generate_system.py", "generate_star.py",
              "generate_bottle_brush.py", "generate_input.py", "functions.py",
              "start_py.csh"]
-POST_FILES = ["post_processing.py", "functions.py", "post_py.csh"]
+POST_FILES = ["post_processing.py", "functions.py", "generate_bottle_brush.py", "post_py.csh"]
 
 
 def start_simulation(run_dir, mode):

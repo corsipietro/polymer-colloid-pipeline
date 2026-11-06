@@ -124,49 +124,120 @@ def test_star_without_colloid_analysis(tmp_path):
 
 # ---- bottlebrush ---------------------------------------------------------
 
-BB = fn.Params(architecture="bottlebrush", nb=4, ns=2, step=2, lbox=LBOX, eps=0.1)
+BB = fn.Params(architecture="bottlebrush", nb=9, ns=3, step=3, lbox=LBOX, eps=0.1,
+               ncoll1=1, ncoll2=2)
 
 
-def bb_frame(shift=0.0, wrap=False, step=0):
-    """Straight backbone of 4 beads along y, 2 side beads on one anchor, 1 colloid per species."""
-    rows = [(1, 2, 50, 50 + shift, 50), (2, 2, 50, 51 + shift, 50), (3, 2, 50, 52 + shift, 50),
-            (4, 2, 50, 53 + shift, 50), (5, 1, 51, 51 + shift, 50), (6, 1, 52, 51 + shift, 50),
-            (7, 3, 60, 51.5 + shift, 50), (8, 4, 50, 51.5 + shift, 70)]
-    if wrap:   # move the backbone across the periodic boundary in y
-        rows = [(i, t, x, (y + 49) % LBOX, z) for i, t, x, y, z in rows]
-    lines = ["ITEM: TIMESTEP", str(step), "ITEM: NUMBER OF ATOMS", str(len(rows)),
-             "ITEM: BOX BOUNDS pp pp pp"] + ["0.0 {}".format(LBOX)] * 3 + ["ITEM: ATOMS id type x y z"]
-    lines += ["{} {} {} {} {}".format(*r) for r in rows]
-    return "\n".join(lines) + "\n"
+def bb_frame_array(rng, wrap=False):
+    """Random bottlebrush frame: nb=9 (anchors 2, 5, 8), 3 side chains of 3, 1 + 2 colloids.
+
+    Backbone along y; side chains radial; ids shuffled to check that order is irrelevant.
+    """
+    rows = []
+    for j in range(1, 10):
+        rows.append((j, 2, 50.0, 45.0 + j, 50.0))
+    next_id = 10
+    for anchor in (2, 5, 8):
+        angle = rng.uniform(0, 2 * np.pi)
+        for k in range(1, 4):
+            rows.append((next_id, 1, 50 - k * np.sin(angle), 45.0 + anchor, 50 + k * np.cos(angle)))
+            next_id += 1
+    rows.append((19, 3, 55.0, 50.0, 50.0))
+    rows.append((20, 4, 50.0, 50.0, 54.0))
+    rows.append((21, 4, 45.0, 46.0, 48.0))
+    arr = np.array(rows, float)
+    if wrap:   # shift the whole system across the periodic boundary in y
+        arr[:, 3] = (arr[:, 3] + 45.0) % LBOX
+    return arr[rng.permutation(len(arr))]
 
 
-def to_array(text):
-    """Parse a one-frame dump text into the frame array."""
-    return np.array([[float(x) for x in line.split()] for line in text.split("\n")[9:] if line])
+def reference(frame, layout):
+    """Direct (loop) port of the original bottlebrush analysis, for one frame."""
+    pos = dict((int(r[0]), r[2:5]) for r in frame)
+    types = dict((int(r[0]), int(r[1])) for r in frame)
+    nb = layout.nb
+    par, ort = [], []
+    for anchor, arm in layout.side.items():
+        vbone = pos[anchor + 1] - pos[anchor] if anchor != nb else pos[anchor] - pos[anchor - 1]
+        for mon in arm:
+            varm = pos[mon] - pos[anchor]
+            p = np.dot(varm, vbone) / np.dot(vbone, vbone) * vbone
+            par.append(np.linalg.norm(p))
+            ort.append(np.linalg.norm(varm - p))
+    brush = np.array([pos[i] for i in pos if types[i] in (1, 2)])
+    cm = brush.mean(axis=0)
+    centres = [np.mean([pos[i] for i in g], axis=0) for g in layout.groups]
+    out = {"par": par, "ort": ort}
+    for species, t in (("a", 3), ("b", 4)):
+        cs = [pos[i] for i in pos if types[i] == t]
+        out[species] = {
+            "cyl": [min(np.linalg.norm(c - pos[i]) for i in range(1, nb + 1)) for c in cs],
+            "eff": [min(np.linalg.norm(c - m) for m in centres) for c in cs],
+            "cm": [np.linalg.norm(c - cm) for c in cs]}
+    return out
 
 
 @pytest.mark.parametrize("wrap", [False, True])
-def test_bbrush_observables(wrap):
-    """End-to-end distance and colloid distances, also with the backbone across the boundary."""
-    obs = pp.bbrush_observables(to_array(bb_frame(wrap=wrap)), LBOX)
-    assert obs["ree"] == pytest.approx(3.0)
-    assert obs["rg_backbone"] == pytest.approx(np.sqrt(np.mean([1.5 ** 2, 0.5 ** 2, 0.5 ** 2, 1.5 ** 2])))
-    brush = np.array([[50, 50, 50], [50, 51, 50], [50, 52, 50], [50, 53, 50], [51, 51, 50], [52, 51, 50]], float)
-    cm = brush.mean(axis=0)
-    assert obs["coll_a_cm"][0] == pytest.approx(np.linalg.norm(np.array([60, 51.5, 50]) - cm))
-    assert obs["coll_b_cm"][0] == pytest.approx(np.linalg.norm(np.array([50, 51.5, 70]) - cm))
-    assert obs["rg"] == pytest.approx(np.sqrt(np.mean(np.sum((brush - cm) ** 2, axis=1))))
+def test_bbrush_frame_matches_loop_reference(wrap):
+    """The vectorised analysis equals a plain-loop port of the original algorithm."""
+    layout = pp.BrushLayout(BB)
+    assert layout.nb == 9 and layout.anchors == [2, 5, 8] and layout.blob_size == 1
+    assert len(layout.groups) == 9
+    frame = bb_frame_array(np.random.RandomState(4), wrap=False)
+    if wrap:
+        # same configuration, but wrapped: distances must not change
+        moved = frame.copy()
+        moved[:, 3] = (moved[:, 3] + 60.0) % LBOX
+        frame_for_ref, frame = frame, moved
+    else:
+        frame_for_ref = frame
+    obs = pp.bbrush_frame(frame, LBOX, layout)
+    ref = reference(frame_for_ref, layout)
+    assert np.allclose(sorted(obs["par"]), sorted(ref["par"]))
+    assert np.allclose(sorted(obs["ort"]), sorted(ref["ort"]))
+    for species in ("a", "b"):
+        for kind in ("cyl", "eff", "cm"):
+            assert np.allclose(sorted(obs[species][kind]), sorted(ref[species][kind]))
+    assert obs["ree"] == pytest.approx(8.0)
 
 
 def test_bbrush_analysis_writes_files(tmp_path):
-    """Full bottlebrush analysis on a synthetic trajectory (first frame skipped)."""
+    """Full analysis on a synthetic trajectory (first frame skipped); normalisations are finite."""
+    rng = np.random.RandomState(0)
     os.makedirs(str(tmp_path / "configurations"))
-    (tmp_path / "configurations" / "bbrush_0.lammpstrj").write_text(
-        "".join(bb_frame(shift=s, step=i) for i, s in enumerate((0, 1, 2, 3))))
+    text = ""
+    for step in range(4):
+        arr = bb_frame_array(rng)
+        lines = ["ITEM: TIMESTEP", str(step), "ITEM: NUMBER OF ATOMS", str(len(arr)),
+                 "ITEM: BOX BOUNDS pp pp pp"] + ["0.0 {}".format(LBOX)] * 3 + ["ITEM: ATOMS id type x y z"]
+        lines += ["{} {} {} {} {}".format(int(r[0]), int(r[1]), *r[2:]) for r in arr]
+        text += "\n".join(lines) + "\n"
+    (tmp_path / "configurations" / "bbrush_0.lammpstrj").write_text(text)
     hist, tables = pp.analyse(str(tmp_path / "configurations"), BB)
-    assert sorted(hist) == ["coll_a_distr_cm", "coll_b_distr_cm", "mon_distr_cm", "rg"]
+    assert hist == {}
+    assert sorted(tables) == ["coll_dist", "coll_dist_b", "coll_dist_nnorm", "coll_dist_nnorm_b",
+                              "density_profile", "end_to_end"]
     assert len(tables["end_to_end"][1]) == 3
-    assert all(np.all(np.isfinite(h.y)) for h in hist.values())
+    assert tables["coll_dist_nnorm"][1][0][-1] == 3          # counter column
     out = tmp_path / "analysis"
     pp.write_results(hist, tables, str(out))
-    assert (out / "end_to_end.txt").read_text().startswith("# frame ree rg_backbone rg\n0 3.0")
+    lines = (out / "coll_dist.txt").read_text().splitlines()
+    assert lines[0] == "# x    y_cyl   y_eff   y_cm"
+    assert all(np.isfinite([float(v) for v in l.split()]).all() for l in lines[1:])
+    # y_eff and y_cyl are different columns now (the old script wrote y_cyl twice)
+    assert any(l.split()[1] != l.split()[2] for l in lines[1:] if float(l.split()[1]) > 0)
+
+
+def test_bbrush_analysis_without_colloids(tmp_path):
+    """colloids 0: only the density profile and end-to-end files."""
+    params = BB.replace(colloids=0)
+    os.makedirs(str(tmp_path / "configurations"))
+    arr = bb_frame_array(np.random.RandomState(1))
+    arr = arr[arr[:, 1] <= 2]
+    lines = ["ITEM: TIMESTEP", "0", "ITEM: NUMBER OF ATOMS", str(len(arr)),
+             "ITEM: BOX BOUNDS pp pp pp"] + ["0.0 {}".format(LBOX)] * 3 + ["ITEM: ATOMS id type x y z"]
+    lines += ["{} {} {} {} {}".format(int(r[0]), int(r[1]), *r[2:]) for r in arr]
+    frame = "\n".join(lines) + "\n"
+    (tmp_path / "configurations" / "bbrush_0.lammpstrj").write_text(frame * 2)
+    _, tables = pp.analyse(str(tmp_path / "configurations"), params)
+    assert sorted(tables) == ["density_profile", "end_to_end"]
