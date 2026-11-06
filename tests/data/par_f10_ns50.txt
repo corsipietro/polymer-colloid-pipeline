@@ -1,0 +1,7 @@
+f 10
+ns 50
+sigma 1
+lbox 161.21988121156616
+q 1.8
+eps 0.2
+restart 1

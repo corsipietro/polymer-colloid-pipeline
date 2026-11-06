@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+# simulation output
+/configurations/
+/gyration/
+/analysis/
+/data/
+*.restart
+star.dat
+in.star
+!tests/data/in.star.expected
+*.script
+Standard-*
+jobid.dat
+p_jobid.dat
