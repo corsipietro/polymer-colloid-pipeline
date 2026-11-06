@@ -22,17 +22,17 @@ DEFAULT_NAME = {"star": "coll_distr_anch", "bottlebrush": "coll_a_distr_cm"}
 
 
 def run_label(params):
-    """Return a file-name label for a run, e.g. ``100_50_1.8_0.2`` (ns, f, q, eps)."""
+    """Return a file-name label for a run, e.g. ``100_50_1.8_0.2`` (ns, f, q, eps, q2)."""
     if params.architecture == "star":
         parts = [params.ns, params.arms]
-        if params.colloids:
-            parts += [params.q, params.eps]
     else:
         parts = [params.ns, params.nb, params.step]
-        if params.colloids:
-            parts.append(params.eps)
-            if params.q is not None:
-                parts.append(params.q)
+    if params.n_species >= 1:
+        parts += [params.eps] if params.architecture == "bottlebrush" else [params.q, params.eps]
+        if params.architecture == "bottlebrush" and params.q is not None:
+            parts.append(params.q)
+    if params.n_species >= 2 and params.q2 is not None:
+        parts.append(params.q2)
     return "_".join(str(p) for p in parts)
 
 

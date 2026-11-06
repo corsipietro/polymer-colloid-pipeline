@@ -4,6 +4,8 @@ import shutil
 import subprocess
 import sys
 
+import pytest
+
 PIPE = os.path.join(os.path.dirname(__file__), "..", "pipeline")
 DATA = os.path.join(os.path.dirname(__file__), "data")
 
@@ -56,3 +58,19 @@ def test_submit_dry_run_and_local_guard(tmp_path):
     refused = subprocess.run([sys.executable, os.path.join(PIPE, "cluster_submit.py"),
                               "--mode", "local"], cwd=str(tmp_path), capture_output=True, text=True)
     assert refused.returncode != 0 and "not recommended" in refused.stderr
+
+
+@pytest.mark.parametrize("architecture, colloids, expected", [
+    ("star", 0, 1), ("star", 1, 7 * 5), ("star", 2, 7 * 5 * 1),
+    ("bottlebrush", 0, 1), ("bottlebrush", 1, 1), ("bottlebrush", 2, 1)])
+def test_scan_runs_for_every_architecture_and_species(monkeypatch, architecture, colloids, expected):
+    """The scan yields valid par.txt content for 0, 1 and 2 colloid species."""
+    sys.path.insert(0, PIPE)
+    import cluster_submit as cs
+    monkeypatch.setattr(cs, "ARCHITECTURE", architecture)
+    monkeypatch.setattr(cs, "COLLOIDS", colloids)
+    runs = list(cs.scan_runs("local"))
+    assert len(runs) == expected
+    for relative, params in runs:
+        assert params.n_species == colloids and params.mode == "local"
+        assert ("q2_" in relative) == (colloids == 2 and architecture == "star")

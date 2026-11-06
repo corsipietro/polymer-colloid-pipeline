@@ -8,14 +8,15 @@ file is skipped: it is the configuration at the start of the (re)started run,
 not an equilibrated one.
 
 STAR output files (two columns ``x y``, bin centre and normalised histogram;
-the colloid files are written only if the run has a colloid):
+the colloid files are written only for the colloid species present; species 2
+uses the suffix ``_b``, e.g. ``coll_distr_anch_b``):
   mon_distr_anch        monomer distance from the core
   mon_distr_cm          monomer distance from the centre of mass of the monomers
   coll_distr_anch       colloid distance from the core
   coll_distr_anch_2rg   same, only for frames where the colloid is within 2 rs
   coll_distr_cm         colloid distance from the centre of mass of the monomers
   rg                    distribution of the radius of gyration of the star
-  loading.txt           per frame: colloid within rs, colloid within 2 rs (0/1)
+  loading.txt           per frame: number of colloids within rs and within 2 rs
 
 ``rs`` is the star radius ``0.6 * f**(1/5) * ns**0.588``. Distances use the
 minimum image convention relative to the core.
@@ -44,7 +45,7 @@ from generate_bottle_brush import set_anchors
 # Lines of the header that precedes the atoms of every LAMMPS dump frame.
 HEADER_LINES = 9
 
-TYPE_MONOMER, TYPE_CORE, TYPE_COLLOID = 1, 2, 3          # star
+TYPE_MONOMER, TYPE_CORE, TYPE_COLLOID, TYPE_COLLOID_B = 1, 2, 3, 4          # star
 TYPE_BB_SIDE, TYPE_BB_BACKBONE, TYPE_BB_COLL_A, TYPE_BB_COLL_B = 1, 2, 3, 4  # bottlebrush
 
 
@@ -98,8 +99,10 @@ def frame_observables(frame, lbox):
         lbox: edge of the cubic periodic box.
 
     Returns:
-        dict with arrays ``mon_anch``, ``mon_cm`` (monomer distances),
-        ``coll_anch``, ``coll_cm`` (colloid distances) and the float ``rg``.
+        dict with arrays ``mon_anch``, ``mon_cm`` (monomer distances), the float
+        ``rg`` and, for each colloid species present (``"a"`` = type 3, ``"b"`` =
+        type 4), a dict with the arrays ``anch`` and ``cm`` (colloid distances from the
+        core and from the centre of mass of the monomers).
     """
     types = frame[:, 1].astype(int)
     xyz = frame[:, 2:5]
@@ -111,7 +114,6 @@ def frame_observables(frame, lbox):
     xyz = anchor + delta
 
     monomers = xyz[types == TYPE_MONOMER]
-    colloid = xyz[types == TYPE_COLLOID]
 
     # The centre of mass uses the monomers only (core excluded).
     cm = monomers.mean(axis=0)
@@ -121,13 +123,17 @@ def frame_observables(frame, lbox):
     star = xyz[(types == TYPE_MONOMER) | (types == TYPE_CORE)]
     rg = np.sqrt(np.mean(np.sum((star - star.mean(axis=0)) ** 2, axis=1)))
 
-    return {
+    result = {
         "mon_anch": np.linalg.norm(monomers - anchor, axis=1),
         "mon_cm": np.linalg.norm(monomers - cm, axis=1),
-        "coll_anch": np.linalg.norm(colloid - anchor, axis=1),
-        "coll_cm": np.linalg.norm(colloid - cm, axis=1),
         "rg": rg,
     }
+    for species, atom_type in (("a", TYPE_COLLOID), ("b", TYPE_COLLOID_B)):
+        colloids = xyz[types == atom_type]
+        if len(colloids):
+            result[species] = {"anch": np.linalg.norm(colloids - anchor, axis=1),
+                               "cm": np.linalg.norm(colloids - cm, axis=1)}
+    return result
 
 
 class Histogram(object):
@@ -185,49 +191,51 @@ def analyse_star(config_dir, params):
 
     Returns:
         ``(histograms, tables)``: dict name -> :class:`Histogram`, and a dict
-        name -> ``(header, rows)`` (``loading``: colloids within rs and 2 rs per
-        frame; empty if the run has no colloid).
+        name -> ``(header, rows)``. For each colloid species present there are the
+        histograms ``coll_distr_anch``, ``coll_distr_anch_2rg``, ``coll_distr_cm`` and the
+        table ``loading`` (colloids of the species within rs and 2 rs, per frame);
+        species 2 uses the suffix ``_b``.
 
     Raises:
         RuntimeError: if no frame could be read.
     """
     lbox = params.box[0]
     rs = star_radius(params.arms, params.ns)
-    colloid = bool(params.colloids)
-    natoms = params.arms * params.ns + 1 + (1 if colloid else 0)
+    natoms = params.arms * params.ns + 1 + params.n_colloids
     nbins_coll = int(round(lbox * 2))
+    species = [(key, suffix) for key, suffix, n in
+               zip(("a", "b"), ("", "_b"), params.counts) if n > 0]
 
     hist = {
         "mon_distr_anch": Histogram(3 * rs, 150),
         "mon_distr_cm": Histogram(3 * rs, 150),
     }
-    if colloid:
-        hist["coll_distr_anch"] = Histogram(lbox, nbins_coll)
-        hist["coll_distr_anch_2rg"] = Histogram(lbox, nbins_coll)
-        hist["coll_distr_cm"] = Histogram(lbox, nbins_coll)
+    for _, suffix in species:
+        hist["coll_distr_anch" + suffix] = Histogram(lbox, nbins_coll)
+        hist["coll_distr_anch_2rg" + suffix] = Histogram(lbox, nbins_coll)
+        hist["coll_distr_cm" + suffix] = Histogram(lbox, nbins_coll)
     rgs = []
-    loading = []
+    loading = dict((suffix, []) for _, suffix in species)
 
     for frame in trajectory_frames(config_dir, "star", natoms):
         obs = frame_observables(frame, lbox)
         hist["mon_distr_anch"].add(obs["mon_anch"])
         hist["mon_distr_cm"].add(obs["mon_cm"])
         rgs.append(obs["rg"])
-        if colloid:
-            hist["coll_distr_cm"].add(obs["coll_cm"])
-            hist["coll_distr_anch"].add(obs["coll_anch"])
-            hist["coll_distr_anch_2rg"].add(obs["coll_anch"][obs["coll_anch"] <= 2 * rs])
-            loading.append((int(np.sum(obs["coll_anch"] <= rs)),
-                            int(np.sum(obs["coll_anch"] <= 2 * rs))))
+        for key, suffix in species:
+            anch = obs[key]["anch"]
+            hist["coll_distr_cm" + suffix].add(obs[key]["cm"])
+            hist["coll_distr_anch" + suffix].add(anch)
+            hist["coll_distr_anch_2rg" + suffix].add(anch[anch <= 2 * rs])
+            loading[suffix].append((int(np.sum(anch <= rs)), int(np.sum(anch <= 2 * rs))))
 
     if not rgs:
         raise RuntimeError("no frames found in {}".format(config_dir))
 
     hist["rg"] = Histogram(2 * rs, 200)
     hist["rg"].add(rgs)
-    tables = {}
-    if colloid:
-        tables["loading"] = ("within_rs within_2rs", loading)
+    tables = dict(("loading" + suffix, ("within_rs within_2rs", rows))
+                  for suffix, rows in loading.items())
     return hist, tables
 
 

@@ -9,10 +9,11 @@ Common interactions (LJ units, reduced temperature 1.0, NVT):
   * colloid-colloid: repulsive;
   * FENE bonds (k = 30 / s^2, R0 = 1.5 s).
 
-Star: one colloid of diameter ``2 rs / q`` (``rs`` = star radius, ``q`` = size
-ratio), read from ``star.dat``; repulsion via shifted-force LJ.
-Bottlebrush: ``ncoll1`` colloids of diameter ``dcoll1`` and ``ncoll2`` of
-diameter ``dcoll2``, inserted at random positions with ``create_atoms``.
+Zero, one or two colloid species (``colloids`` in par.txt; atom types 3 and 4).
+Star: colloids of diameter ``2 rs / q`` (``rs`` = star radius, ``q`` = size ratio;
+``q2`` for the second species), read from ``star.dat``; repulsion via shifted-force LJ.
+Bottlebrush: ``ncoll1`` / ``ncoll2`` colloids of the two species, inserted at random
+positions with ``create_atoms``; diameters from ``q`` / ``q2`` or ``dcoll1`` / ``dcoll2``.
 
 A fresh run reads the data file; with ``restart 1`` and an existing restart
 file the run is continued, writing to the next output file index.
@@ -27,8 +28,13 @@ import random
 
 import numpy as np
 
-from functions import check_file_number, read_par, star_radius
+from functions import check_file_number, read_par, star_colloid_diameters
 from generate_bottle_brush import brush_size, colloid_diameters
+
+
+def species_eps(params):
+    """Return the attraction strengths ``(eps1, eps2)`` of the two colloid species."""
+    return params.eps, (params.eps2 if params.eps2 is not None else params.eps)
 
 # LJ energy scale of the FENE bonds and thermostat temperature.
 ENERGY = 1
@@ -56,7 +62,7 @@ def build_input_star(params, file_number, continue_run):
         continue_run: True to read ``star2.restart`` instead of ``star.dat``.
     """
     arms, ns, sigma = params.arms, params.ns, params.sigma
-    colloid = bool(params.colloids)
+    n_species = params.n_species
     r_core = params.rcore
     ntot = 1 + ns * arms
 
@@ -78,8 +84,9 @@ def build_input_star(params, file_number, continue_run):
         out.append("\n")
     else:
         out.append("read_data star.dat\n")
-        if colloid:
-            out.append("group coll type 3\n")
+        if n_species:
+            types = " ".join(str(t) for _, t, _ in params.species())
+            out.append("group coll type {}\n".format(types))
             out.append("velocity coll set 0.01 0.01 0.01\n")
         out.append("\n")
 
@@ -94,7 +101,7 @@ def build_input_star(params, file_number, continue_run):
 
     # With a colloid the LJ flavours are mixed (hybrid); without it a single
     # shifted-force LJ style is enough (LAMMPS rejects an unused hybrid sub-style).
-    if colloid:
+    if n_species:
         out.append("pair_style hybrid lj/cut {0} lj/sf {1}\n".format(CUT * sigma, CUT * sigma))
         sf = "lj/sf "
     else:
@@ -103,14 +110,23 @@ def build_input_star(params, file_number, continue_run):
     out.append("pair_coeff 1 1 {0}1.0 1.0 {1}\n".format(sf, CUT * sigma))
     out.append("pair_coeff 1 2 {0}1.0 {1} {2}\n".format(sf, s_core, CUT * s_core))
     out.append("pair_coeff 2 2 {0}1.0 {1} {2}\n".format(sf, 2 * r_core, CUT * 2 * r_core))
-    if colloid:
-        # Colloid diameter (twice its radius rs / q) and Lorentz mixing.
-        sigma_colloid = 2 * (star_radius(arms, ns) / params.q)
-        s13 = np.mean([sigma, sigma_colloid])
-        s23 = np.mean([2 * r_core, sigma_colloid])
-        out.append("pair_coeff 1 3 lj/cut {0} {1} {2}\n".format(params.eps, s13, 2.5 * s13))
-        out.append("pair_coeff 2 3 lj/cut {0} {1} {2}\n".format(params.eps, s23, 2.5 * s23))
-        out.append("pair_coeff 3 3 lj/sf 1.0 {0} {1}\n".format(sigma_colloid, CUT * sigma_colloid))
+    if n_species:
+        # Colloid diameters 2 rs / q and Lorentz mixing with the monomers and the core.
+        diameters = star_colloid_diameters(params)[:n_species]
+        epss = species_eps(params)
+        for index, d in enumerate(diameters):
+            atom_type = 3 + index
+            s13 = np.mean([sigma, d])
+            s23 = np.mean([2 * r_core, d])
+            out.append("pair_coeff 1 {0} lj/cut {1} {2} {3}\n".format(
+                atom_type, epss[index], s13, 2.5 * s13))
+            out.append("pair_coeff 2 {0} lj/cut {1} {2} {3}\n".format(
+                atom_type, epss[index], s23, 2.5 * s23))
+        for index, d in enumerate(diameters):
+            out.append("pair_coeff {0} {0} lj/sf 1.0 {1} {2}\n".format(3 + index, d, CUT * d))
+        if n_species == 2:
+            d12 = np.mean(diameters)
+            out.append("pair_coeff 3 4 lj/sf 1.0 {0} {1}\n".format(d12, CUT * d12))
     out.append("\n")
 
     out.append("bond_style fene\n")
@@ -164,10 +180,10 @@ def build_input_bbrush(params, file_number, continue_run, seeds):
         seeds: ``(seed1, seed2)`` for the two ``create_atoms`` calls.
     """
     sigma = params.sigma
-    colloids = bool(params.colloids)
+    n_species = params.n_species
+    n1, n2 = params.counts
     nb, nbrush, natoms = brush_size(params.nb, params.ns, params.step)
-    if colloids:
-        natoms += params.ncoll1 + params.ncoll2
+    natoms += n1 + n2
 
     out = []
     out.append("######################\n#   Initialization   #\n######################\n")
@@ -184,11 +200,10 @@ def build_input_bbrush(params, file_number, continue_run, seeds):
         out.append("read_restart bbrush2.restart remap\n")
     else:
         out.append("read_data bbrush.dat\n")
-        if colloids:
-            if params.ncoll1:
-                out.append("create_atoms 3 random {0} {1} NULL\n".format(params.ncoll1, seeds[0]))
-            if params.ncoll2:
-                out.append("create_atoms 4 random {0} {1} NULL\n".format(params.ncoll2, seeds[1]))
+        if n1:
+            out.append("create_atoms 3 random {0} {1} NULL\n".format(n1, seeds[0]))
+        if n2:
+            out.append("create_atoms 4 random {0} {1} NULL\n".format(n2, seeds[1]))
     out.append("\n")
 
     out.append("################\n#   Settings   #\n################\n")
@@ -204,17 +219,19 @@ def build_input_bbrush(params, file_number, continue_run, seeds):
     out.append("pair_coeff 1 1 1.0 {}\n".format(sigma))
     out.append("pair_coeff 1 2 1.0 {}\n".format(sigma))
     out.append("pair_coeff 2 2 1.0 {}\n".format(sigma))
-    if colloids:
-        d1, d2 = colloid_diameters(params)
-        for atom_type, diameter in ((3, d1), (4, d2)):
-            mixed = np.mean([sigma, diameter])
+    if n_species:
+        diameters = colloid_diameters(params)[:n_species]
+        epss = species_eps(params)
+        for index, d in enumerate(diameters):
+            mixed = np.mean([sigma, d])
             for bead in (1, 2):
                 out.append("pair_coeff {0} {1} {2} {3} {4}\n".format(
-                    bead, atom_type, params.eps, mixed, 2.5 * mixed))
-        out.append("pair_coeff 3 3 1.0 {0} {1}\n".format(d1, CUT * d1))
-        d12 = np.mean([d1, d2])
-        out.append("pair_coeff 3 4 1.0 {0} {1}\n".format(d12, CUT * d12))
-        out.append("pair_coeff 4 4 1.0 {0} {1}\n".format(d2, CUT * d2))
+                    bead, 3 + index, epss[index], mixed, 2.5 * mixed))
+        out.append("pair_coeff 3 3 1.0 {0} {1}\n".format(diameters[0], CUT * diameters[0]))
+        if n_species == 2:
+            d12 = np.mean(diameters)
+            out.append("pair_coeff 3 4 1.0 {0} {1}\n".format(d12, CUT * d12))
+            out.append("pair_coeff 4 4 1.0 {0} {1}\n".format(diameters[1], CUT * diameters[1]))
     out.append("\n")
 
     out.append("bond_style fene\n")

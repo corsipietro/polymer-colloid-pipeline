@@ -1,11 +1,14 @@
 architecture star
 mode cluster
-colloids 1
+colloids 2
 f 50
 ns 100
 sigma 1
 lbox 400
-q 1.8
-eps 0.2
 rcore 2.25
+eps 0.2
+ncoll1 1
+q 1.8
+ncoll2 1
+q2 2.6
 restart 0

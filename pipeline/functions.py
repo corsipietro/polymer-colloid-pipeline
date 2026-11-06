@@ -33,6 +33,9 @@ MODES = ("local", "cluster")
 
 DEFAULT_RCORE = 1.75          # star core radius
 DEFAULT_BBRUSH_EPS = 0.1      # bottlebrush: colloid-monomer attraction strength
+# Default number of colloids per species: one for the star, 40 for the bottlebrush.
+DEFAULT_NCOLL = {"star": 1, "bottlebrush": 40}
+DEFAULT_COLLOIDS = {"star": 1, "bottlebrush": 2}   # default number of colloid species
 
 _STRING_KEYS = ("architecture", "mode")
 _COMMON_REQUIRED = ("ns", "sigma", "lbox", "restart")
@@ -52,25 +55,26 @@ class Params(object):
         sigma         monomer diameter (LJ units)
         lbox          edge of the cubic periodic box (``box`` = ``[lbox] * 3``)
         restart       1 to continue a previous run from its restart file
-        colloids      1 if colloids are present, 0 for the bare polymer
-        eps           colloid-monomer attraction strength
+        colloids      number of colloid species: 0 = the polymer alone, 1 = species 1,
+                      2 = species 1 and 2 (default: 1 for the star, 2 for the bottlebrush)
+        ncoll1/ncoll2 number of colloids of species 1 / 2 (atom types 3 / 4);
+                      default 1 for the star, 40 for the bottlebrush
+        eps, eps2     colloid-monomer attraction strength of species 1 / 2 (eps2 = eps if None)
         seed          optional integer seed (None = random)
     Star only:
         arms          number of arms f
-        q             size ratio polymer / colloid: star radius over colloid radius
-                      (star); for the bottlebrush see ``q`` below
+        q, q2         size ratio polymer / colloid of species 1 / 2: star radius over
+                      colloid radius, i.e. colloid diameter = 2 rs / q
         rcore         core radius (1.75 fits at most ~42 arms; f=50 needs >= 2.0)
     Bottlebrush only:
         nb, step      backbone length and grafting spacing (one side chain every ``step``)
-        ncoll1, ncoll2   number of colloids of the two species (type 3 and 4)
-        q, q2         size ratio effective-star radius / colloid radius of species 1
-                      and 2 (see ``generate_bottle_brush.colloid_diameters``); if
-                      absent, the explicit diameters dcoll1, dcoll2 are used
-        dcoll1, dcoll2   explicit colloid diameters (defaults 14 and 10)
+        q, q2         size ratio effective-star radius / colloid radius of species 1 / 2
+                      (see ``generate_bottle_brush.colloid_diameters``); if absent, the
+                      explicit diameters dcoll1, dcoll2 (defaults 14 and 10) are used
     """
 
     _FIELDS = ("architecture", "mode", "ns", "sigma", "lbox", "restart", "colloids",
-               "eps", "seed", "arms", "q", "q2", "rcore", "nb", "step",
+               "eps", "eps2", "seed", "arms", "q", "q2", "rcore", "nb", "step",
                "ncoll1", "dcoll1", "ncoll2", "dcoll2")
 
     def __init__(self, **kwargs):
@@ -81,8 +85,9 @@ class Params(object):
         self.sigma = 1.0
         self.lbox = None
         self.restart = 0
-        self.colloids = 1
+        self.colloids = None
         self.eps = None
+        self.eps2 = None
         self.seed = None
         self.arms = None
         self.q = None
@@ -90,8 +95,8 @@ class Params(object):
         self.rcore = DEFAULT_RCORE
         self.nb = None
         self.step = None
-        self.ncoll1, self.dcoll1 = 40, 14.0
-        self.ncoll2, self.dcoll2 = 40, 10.0
+        self.ncoll1 = self.ncoll2 = None
+        self.dcoll1, self.dcoll2 = 14.0, 10.0
         for key, value in kwargs.items():
             if key not in self._FIELDS:
                 raise TypeError("unknown parameter: {}".format(key))
@@ -106,6 +111,30 @@ class Params(object):
     def spec(self):
         """File names of the architecture (see :data:`ARCHITECTURES`)."""
         return ARCHITECTURES[self.architecture]
+
+    @property
+    def n_species(self):
+        """Number of colloid species declared (0, 1 or 2)."""
+        if self.colloids is None:
+            return DEFAULT_COLLOIDS[self.architecture]
+        return self.colloids
+
+    @property
+    def counts(self):
+        """``(n1, n2)``: colloids of species 1 and 2 actually present in the system."""
+        default = DEFAULT_NCOLL[self.architecture]
+        n1 = default if self.ncoll1 is None else self.ncoll1
+        n2 = default if self.ncoll2 is None else self.ncoll2
+        return (n1 if self.n_species >= 1 else 0, n2 if self.n_species >= 2 else 0)
+
+    @property
+    def n_colloids(self):
+        """Total number of colloids in the system."""
+        return sum(self.counts)
+
+    def species(self):
+        """Return ``[(index, atom_type, count), ...]`` for the species that are present."""
+        return [(i, 2 + i, n) for i, n in enumerate(self.counts, 1) if n > 0]
 
     def replace(self, **changes):
         """Return a copy with some attributes changed."""
@@ -134,17 +163,31 @@ def star_radius(arms, ns):
     return 0.6 * arms ** (1 / 5) * ns ** 0.588
 
 
+def star_colloid_diameters(params):
+    """Return the diameters ``(d1, d2)`` of the colloid species of a star run.
+
+    The diameter is ``2 * rs / q`` (``q`` for species 1, ``q2`` for species 2),
+    i.e. ``q`` is the size ratio star radius / colloid radius. A species that is not
+    present has diameter None.
+    """
+    rs = star_radius(params.arms, params.ns)
+    d1 = 2 * rs / params.q if params.q is not None else None
+    d2 = 2 * rs / params.q2 if params.q2 is not None else None
+    return d1, d2
+
+
 def read_par(path="par.txt"):
     """Read a ``par.txt`` file and return a :class:`Params`.
 
     The file holds one ``key value`` pair per line. Keys:
 
     * all: ``architecture`` (default star), ``mode`` (default cluster),
-      ``ns``, ``sigma``, ``lbox``, ``restart``, ``colloids`` (default 1), ``seed``;
-    * star: ``f``, and, if colloids are present, ``q`` and ``eps``; optional ``rcore``;
-    * bottlebrush: ``nb``, ``step``; optional ``eps`` (default 0.1), ``ncoll1``,
-      ``dcoll1``, ``ncoll2``, ``dcoll2``, or ``q`` / ``q2`` (size ratios) instead of
-      the diameters.
+      ``ns``, ``sigma``, ``lbox``, ``restart``, ``seed``, ``colloids`` (number of
+      colloid species 0/1/2; default 1 for the star, 2 for the bottlebrush),
+      ``ncoll1``, ``ncoll2`` (colloids per species), ``eps``, ``eps2``;
+    * star: ``f``; ``q`` and ``eps`` with one species, plus ``q2`` with two; optional ``rcore``;
+    * bottlebrush: ``nb``, ``step``; ``eps`` (default 0.1); ``q`` / ``q2`` (size ratios)
+      or the explicit diameters ``dcoll1`` / ``dcoll2`` (defaults 14 and 10).
 
     Files written before the ``architecture`` key existed are read as star runs.
 
@@ -169,10 +212,16 @@ def read_par(path="par.txt"):
         raise ValueError("{}: unknown mode '{}' (use one of: {})".format(
             path, mode, ", ".join(MODES)))
 
-    colloids = int(values.get("colloids", 1))
+    colloids = int(values["colloids"]) if "colloids" in values else None
+    if colloids is not None and colloids not in (0, 1, 2):
+        raise ValueError("{}: colloids must be 0, 1 or 2, got {}".format(path, colloids))
+    n_species = DEFAULT_COLLOIDS[architecture] if colloids is None else colloids
     required = _COMMON_REQUIRED + _REQUIRED[architecture]
-    if architecture == "star" and colloids:
-        required += ("q", "eps")
+    if architecture == "star":
+        if n_species >= 1:
+            required += ("q", "eps")
+        if n_species >= 2:
+            required += ("q2",)
     missing = [key for key in required if key not in values]
     if missing:
         raise KeyError("{} is missing the keys: {}".format(path, ", ".join(missing)))
@@ -182,47 +231,55 @@ def read_par(path="par.txt"):
         return int(values[key]) if key in values else None
 
     params = Params(
-        architecture=architecture, mode=mode, colloids=colloids,
+        architecture=architecture, mode=mode, colloids=n_species,
         ns=int(values["ns"]), sigma=values["sigma"], lbox=values["lbox"],
         restart=int(values["restart"]), seed=optional_int("seed"),
-        eps=values.get("eps"),
+        eps=values.get("eps"), eps2=values.get("eps2"),
+        q=values.get("q"), q2=values.get("q2"),
+        ncoll1=optional_int("ncoll1"), ncoll2=optional_int("ncoll2"),
     )
     if architecture == "star":
         params.arms = int(values["f"])
-        params.q = values.get("q")
         params.rcore = values.get("rcore", DEFAULT_RCORE)
     else:
         params.nb = int(values["nb"])
         params.step = int(values["step"])
         if params.eps is None:
             params.eps = DEFAULT_BBRUSH_EPS
-        params.q = values.get("q")
-        params.q2 = values.get("q2")
-        params.ncoll1 = int(values.get("ncoll1", params.ncoll1))
         params.dcoll1 = values.get("dcoll1", params.dcoll1)
-        params.ncoll2 = int(values.get("ncoll2", params.ncoll2))
         params.dcoll2 = values.get("dcoll2", params.dcoll2)
     return params
 
 
 def write_par(path, params):
     """Write ``params`` to a ``par.txt`` file readable by :func:`read_par`."""
+    n = params.n_species
     lines = [("architecture", params.architecture), ("mode", params.mode),
-             ("colloids", params.colloids)]
+             ("colloids", n)]
     if params.architecture == "star":
         lines += [("f", params.arms), ("ns", params.ns), ("sigma", params.sigma),
                   ("lbox", params.lbox)]
-        if params.colloids:
-            lines += [("q", params.q), ("eps", params.eps)]
         lines += [("rcore", params.rcore)]
     else:
         lines += [("nb", params.nb), ("ns", params.ns), ("sigma", params.sigma),
                   ("step", params.step), ("lbox", params.lbox)]
-        if params.colloids:
-            lines += [("eps", params.eps), ("ncoll1", params.ncoll1),
-                      ("ncoll2", params.ncoll2)]
-            lines += [("q", params.q) if params.q is not None else ("dcoll1", params.dcoll1)]
-            lines += [("q2", params.q2) if params.q2 is not None else ("dcoll2", params.dcoll2)]
+    if n >= 1:
+        lines += [("eps", params.eps)]
+        if params.ncoll1 is not None:
+            lines += [("ncoll1", params.ncoll1)]
+        if params.q is not None:
+            lines += [("q", params.q)]
+        elif params.architecture == "bottlebrush":
+            lines += [("dcoll1", params.dcoll1)]
+    if n >= 2:
+        if params.eps2 is not None:
+            lines += [("eps2", params.eps2)]
+        if params.ncoll2 is not None:
+            lines += [("ncoll2", params.ncoll2)]
+        if params.q2 is not None:
+            lines += [("q2", params.q2)]
+        elif params.architecture == "bottlebrush":
+            lines += [("dcoll2", params.dcoll2)]
     lines += [("restart", params.restart)]
     if params.seed is not None:
         lines += [("seed", params.seed)]

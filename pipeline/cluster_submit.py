@@ -9,8 +9,8 @@ directory::
     python3 cluster_submit.py --mode local     # run on this machine
     python3 cluster_submit.py --dry-run        # only create directories and par.txt
 
-Star scan:        <tag>/f_<f>/ns_<ns>/[eps_<eps>/q_<q>/]
-Bottlebrush scan: <tag>/nb_<nb>/ns_<ns>/step_<step>/[eps_<eps>/[q_<q>/]]
+Star scan:        <tag>/f_<f>/ns_<ns>/[eps_<eps>/q_<q>/[q2_<q2>/]]
+Bottlebrush scan: <tag>/nb_<nb>/ns_<ns>/step_<step>/[eps_<eps>/[q_<q>/[q2_<q2>/]]]
 Each run directory gets its own ``par.txt`` and a copy of the scripts.
 
 In local mode the simulations are started in the background; run one scan point
@@ -34,14 +34,16 @@ from launcher import RUN_FILES, start_simulation
 
 ARCHITECTURE = "star"       # "star" or "bottlebrush"
 MODE = "cluster"            # "cluster" (PBS queue) or "local" (this machine)
-COLLOIDS = 1                # 1 = with colloids, 0 = bare polymer
+COLLOIDS = 1                # colloid species: 0 = polymer alone, 1 = one species, 2 = two species
 SIGMA = 1                   # monomer diameter
 NS = [100]                  # monomers per arm / per side chain
 
 # --- star ---
 ARMS = [50]                                   # arms per star (f)
-RATIO = [1.4, 1.8, 2.2, 2.6, 3.0, 3.4, 3.8]   # q = star radius / colloid radius
+RATIO = [1.4, 1.8, 2.2, 2.6, 3.0, 3.4, 3.8]   # q = star radius / colloid radius (species 1)
 EPS_STAR = [0.05, 0.1, 0.15, 0.2, 0.25]       # colloid-monomer attraction strength
+RATIO2 = [2.6]                                # q2, species 2 (used only if COLLOIDS = 2)
+NCOLL_STAR = (1, 1)                           # colloids of species 1 and 2
 PHI = 0.001                                   # volume fraction -> sets the box size
 RCORE = 2.25                                  # core radius (1.75 cannot fit f=50; needs >= 2.0)
 
@@ -50,48 +52,60 @@ NB = [99]                   # backbone monomers
 STEP = [3]                  # backbone monomers between side chains
 EPS_BBRUSH = [0.1]          # colloid-monomer attraction strength
 LBOX_BBRUSH = 120           # box edge (must exceed nb*sigma and 2*ns*sigma)
-NCOLL = (40, 40)            # number of colloids of the two species (0 = species absent)
-DCOLL = (14.0, 10.0)        # their diameters, used when RATIO_BBRUSH is empty
+NCOLL = (40, 40)            # colloids of species 1 and 2 (0 = species absent)
+DCOLL = (14.0, 10.0)        # their diameters, used when RATIO_BBRUSH / RATIO2_BBRUSH are empty
 RATIO_BBRUSH = []           # size ratios q = effective-star radius / colloid radius of species 1;
-                            # if not empty they replace DCOLL[0] (diameter = 2 rc / q); species 2
-                            # keeps DCOLL[1]
+                            # if not empty they replace DCOLL[0] (diameter = 2 rc / q)
+RATIO2_BBRUSH = []          # same for species 2 (replaces DCOLL[1])
 
 ############################
 
 
-def box_length(arms, ns, q, phi=PHI, colloid=True):
-    """Return the star box edge for volume fraction ``phi`` (one star, optionally one colloid)."""
+def box_length(arms, ns, q, phi=PHI):
+    """Return the star box edge for volume fraction ``phi`` (one star, one colloid of ratio q).
+
+    ``q=None`` (polymer alone) uses the star volume only.
+    """
     rs = star_radius(arms, ns)
-    rc = rs / q if colloid else 0.0
+    rc = rs / q if q else 0.0
     volume = (4 / 3) * np.pi * (rc ** 3 + rs ** 3) / phi
     return volume ** (1 / 3)
 
 
 def scan_runs(mode):
     """Yield ``(relative_path, Params)`` for every point of the configured scan."""
-    common = dict(mode=mode, colloids=COLLOIDS, sigma=SIGMA, restart=0)
+    n = COLLOIDS
+    if n not in (0, 1, 2):
+        raise ValueError("COLLOIDS must be 0, 1 or 2")
+    common = dict(mode=mode, colloids=n, sigma=SIGMA, restart=0)
     if ARCHITECTURE == "star":
-        qs = RATIO if COLLOIDS else [None]
-        epss = EPS_STAR if COLLOIDS else [None]
-        for arms, ns, eps, q in itertools.product(ARMS, NS, epss, qs):
+        epss = EPS_STAR if n else [None]
+        qs = RATIO if n >= 1 else [None]
+        q2s = RATIO2 if n >= 2 else [None]
+        for arms, ns, eps, q, q2 in itertools.product(ARMS, NS, epss, qs, q2s):
             parts = ["f_{}".format(arms), "ns_{}".format(ns)]
-            if COLLOIDS:
+            if n >= 1:
                 parts += ["eps_{}".format(eps), "q_{}".format(q)]
-            lbox = box_length(arms, ns, q if COLLOIDS else 1.0, colloid=bool(COLLOIDS))
+            if n >= 2:
+                parts.append("q2_{}".format(q2))
             yield os.path.join(*parts), Params(
-                architecture="star", arms=arms, ns=ns, q=q, eps=eps, lbox=lbox,
-                rcore=RCORE, **common)
+                architecture="star", arms=arms, ns=ns, q=q, q2=q2, eps=eps,
+                lbox=box_length(arms, ns, q), rcore=RCORE,
+                ncoll1=NCOLL_STAR[0], ncoll2=NCOLL_STAR[1], **common)
     elif ARCHITECTURE == "bottlebrush":
-        epss = EPS_BBRUSH if COLLOIDS else [None]
-        qs = RATIO_BBRUSH if (COLLOIDS and RATIO_BBRUSH) else [None]
-        for nb, ns, step, eps, q in itertools.product(NB, NS, STEP, epss, qs):
+        epss = EPS_BBRUSH if n else [None]
+        qs = RATIO_BBRUSH if (n >= 1 and RATIO_BBRUSH) else [None]
+        q2s = RATIO2_BBRUSH if (n >= 2 and RATIO2_BBRUSH) else [None]
+        for nb, ns, step, eps, q, q2 in itertools.product(NB, NS, STEP, epss, qs, q2s):
             parts = ["nb_{}".format(nb), "ns_{}".format(ns), "step_{}".format(step)]
-            if COLLOIDS:
+            if n >= 1:
                 parts.append("eps_{}".format(eps))
             if q is not None:
                 parts.append("q_{}".format(q))
+            if q2 is not None:
+                parts.append("q2_{}".format(q2))
             yield os.path.join(*parts), Params(
-                architecture="bottlebrush", nb=nb, ns=ns, step=step, eps=eps, q=q,
+                architecture="bottlebrush", nb=nb, ns=ns, step=step, eps=eps, q=q, q2=q2,
                 lbox=LBOX_BBRUSH, ncoll1=NCOLL[0], ncoll2=NCOLL[1],
                 dcoll1=DCOLL[0], dcoll2=DCOLL[1], **common)
     else:

@@ -3,7 +3,7 @@
 """Build the LAMMPS data file ``bbrush.dat`` for a bottlebrush.
 
 Atom types:  1 = side-chain monomer, 2 = backbone monomer, and (only if
-colloids are present) 3 and 4 = the two colloid species. The colloids are *not*
+colloids are present) 3 and 4 = colloid species 1 and 2. The colloids are *not*
 written to the data file: ``in.bbrush`` inserts them with ``create_atoms``, but
 their types and masses are declared here so that LAMMPS accepts them.
 Bond type 1 (FENE) is used everywhere.
@@ -81,7 +81,7 @@ def brush_size(nb, ns, step):
     return nb, len(anchors), nb + ns * len(anchors)
 
 
-def build_bottle_brush(nb, ns, sigma, step, box, rng, colloids=True):
+def build_bottle_brush(nb, ns, sigma, step, box, rng, n_types=4):
     """Return the text of the LAMMPS data file of a bottlebrush.
 
     Atom ids: 1..nb = backbone, then the side chains one after the other
@@ -94,7 +94,8 @@ def build_bottle_brush(nb, ns, sigma, step, box, rng, colloids=True):
         step: backbone monomers between two anchors.
         box: ``[Lx, Ly, Lz]``.
         rng: ``numpy.random.RandomState`` (side-chain directions).
-        colloids: declare the colloid types 3 and 4.
+        n_types: atom types to declare: 2 + number of colloid species (the colloids
+            themselves are inserted by LAMMPS, see ``in.bbrush``).
     """
     anchors, nb = set_anchors(step, nb)
     check_box(nb, ns, sigma, box)
@@ -106,7 +107,7 @@ def build_bottle_brush(nb, ns, sigma, step, box, rng, colloids=True):
     out.append("LAMMPS data file\n\n")
     out.append("{0} atoms\n{1} bonds\n".format(ntot, ntot - 1))
     out.append("0 angles\n0 dihedrals\n0 impropers\n\n")
-    ntypes = 4 if colloids else 2
+    ntypes = n_types
     out.append("{} atom types\n1 bond types\n0 angle types\n0 dihedral types\n"
                "0 improper types\n\n".format(ntypes))
     out.append("0.0 {0} xlo xhi\n0.0 {1} ylo yhi\n0.0 {2} zlo zhi\n\n".format(*box))

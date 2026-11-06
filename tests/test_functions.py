@@ -17,11 +17,23 @@ def test_read_par_legacy_star_file(tmp_path):
 
 
 def test_read_par_bottlebrush_defaults(tmp_path):
-    """Bottlebrush: colloid parameters default to the original in.bbrush values."""
+    """Bottlebrush without colloid keys: two species of 40, explicit diameters 14 and 10, eps 0.1."""
     p = fn.read_par(os.path.join(os.path.dirname(__file__), "data", "par_bbrush.txt"))
     assert (p.architecture, p.mode, p.nb, p.ns, p.step) == ("bottlebrush", "local", 99, 50, 3)
-    assert (p.eps, p.ncoll1, p.dcoll1, p.ncoll2, p.dcoll2) == (0.1, 40, 14.0, 40, 10.0)
+    assert (p.eps, p.n_species, p.counts, p.dcoll1, p.dcoll2) == (0.1, 2, (40, 40), 14.0, 10.0)
     assert p.spec["restart_file"] == "bbrush2.restart"
+
+
+def test_colloid_species_counts(tmp_path):
+    """colloids 0/1/2 select the species that are present."""
+    star = fn.Params(arms=5, ns=5, lbox=50.0, q=2.0, q2=3.0, eps=0.1)
+    assert star.species() == [(1, 3, 1)]                      # star default: one colloid
+    assert star.replace(colloids=0).species() == [] and star.replace(colloids=0).n_colloids == 0
+    two = star.replace(colloids=2, ncoll1=2, ncoll2=4)
+    assert two.species() == [(1, 3, 2), (2, 4, 4)] and two.n_colloids == 6
+    brush = fn.Params(architecture="bottlebrush", nb=9, ns=3, step=3, lbox=50.0)
+    assert brush.species() == [(1, 3, 40), (2, 4, 40)]         # bottlebrush default: two species
+    assert brush.replace(colloids=1).species() == [(1, 3, 40)]
 
 
 def test_read_par_errors(tmp_path):
@@ -38,6 +50,17 @@ def test_read_par_errors(tmp_path):
         fn.read_par(str(path))
 
 
+def test_star_two_species_needs_q2(tmp_path):
+    """colloids 2 on a star requires q2."""
+    path = tmp_path / "par.txt"
+    path.write_text("colloids 2\nf 10\nns 50\nsigma 1\nlbox 100\nq 1.8\neps 0.2\nrestart 0\n")
+    with pytest.raises(KeyError, match="q2"):
+        fn.read_par(str(path))
+    path.write_text("colloids 3\nf 10\nns 50\nsigma 1\nlbox 100\nrestart 0\n")
+    with pytest.raises(ValueError, match="colloids"):
+        fn.read_par(str(path))
+
+
 def test_star_without_colloid_does_not_need_q_and_eps(tmp_path):
     """colloids 0 drops the colloid keys."""
     path = tmp_path / "par.txt"
@@ -47,13 +70,16 @@ def test_star_without_colloid_does_not_need_q_and_eps(tmp_path):
 
 
 @pytest.mark.parametrize("params", [
-    fn.Params(architecture="star", mode="local", arms=50, ns=100, q=1.4, eps=0.05,
+    fn.Params(architecture="star", mode="local", arms=50, ns=100, q=1.4, eps=0.05, colloids=1,
               lbox=123.456789012345, rcore=2.25, seed=7),
+    fn.Params(architecture="star", arms=20, ns=30, q=1.4, q2=2.2, eps=0.1, eps2=0.3, colloids=2,
+              ncoll1=2, ncoll2=3, lbox=90.0),
     fn.Params(architecture="star", colloids=0, arms=10, ns=20, lbox=80.0),
     fn.Params(architecture="bottlebrush", mode="local", nb=99, ns=50, step=3, lbox=120.0,
-              eps=0.2, ncoll1=5, dcoll1=14.0, ncoll2=6, dcoll2=10.0, restart=1),
+              eps=0.2, colloids=2, ncoll1=5, dcoll1=14.0, ncoll2=6, dcoll2=10.0, restart=1),
     fn.Params(architecture="bottlebrush", nb=99, ns=50, step=3, lbox=120.0, eps=0.1,
-              ncoll1=1, ncoll2=0, q=2.5, q2=1.5),
+              colloids=2, ncoll1=1, ncoll2=2, q=2.5, q2=1.5),
+    fn.Params(architecture="bottlebrush", colloids=1, nb=30, ns=10, step=2, lbox=60.0, eps=0.1, q=2.0),
     fn.Params(architecture="bottlebrush", colloids=0, nb=30, ns=10, step=2, lbox=60.0, eps=0.1),
 ])
 def test_write_par_roundtrip(tmp_path, params):
@@ -82,7 +108,7 @@ def test_find_run_dirs(tmp_path):
     for ns in (100, 1000):
         run = tmp_path / "f_50" / "ns_{}".format(ns) / "eps_0.2" / "q_1.8"
         os.makedirs(str(run))
-        fn.write_par(str(run / "par.txt"), fn.Params(arms=50, ns=ns, q=1.8, eps=0.2, lbox=100.0))
+        fn.write_par(str(run / "par.txt"), fn.Params(arms=50, ns=ns, q=1.8, eps=0.2, colloids=1, lbox=100.0))
     assert len(fn.find_run_dirs(str(tmp_path))) == 2
     only = fn.find_run_dirs(str(tmp_path), ns=100)
     assert len(only) == 1 and "ns_100" + os.sep in only[0]

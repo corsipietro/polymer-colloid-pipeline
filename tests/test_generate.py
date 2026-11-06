@@ -36,7 +36,7 @@ def parse_data(text):
 def test_star_data_file_is_consistent():
     """Counts, bond topology and bond lengths of a small star."""
     arms, ns, sigma, box = 6, 5, 1.0, [50.0] * 3
-    text = gs.build_star(arms, ns, sigma, box, np.random.RandomState(1))
+    text = gs.build_star(arms, ns, sigma, box, np.random.RandomState(1), colloids=[(3, 1, 6.0)])
     n_atoms, n_bonds, atoms, bonds = parse_data(text)
 
     assert n_atoms == arms * ns + 2 == len(atoms)
@@ -94,7 +94,7 @@ def test_input_fresh_run_reads_data_file():
 
 def test_star_without_colloid():
     """colloids 0: no colloid atom, two atom types, no colloid lines in the input."""
-    text = gs.build_star(4, 3, 1.0, [40.0] * 3, np.random.RandomState(2), colloid=False)
+    text = gs.build_star(4, 3, 1.0, [40.0] * 3, np.random.RandomState(2), n_types=2)
     n_atoms, n_bonds, atoms, bonds = parse_data(text)
     assert n_atoms == 4 * 3 + 1 == len(atoms) and n_bonds == 12
     assert "2 atom types" in text and all(t != 3 for t, _ in atoms.values())
@@ -140,8 +140,7 @@ def test_bbrush_input_matches_original_in_bbrush():
 
     The original used the rounded cutoff 1.1224; the generator uses 2^(1/6).
     """
-    params = fn.read_par(os.path.join(HERE, "data", "par_bbrush.txt"))
-    params.colloids = 1
+    params = fn.read_par(os.path.join(HERE, "data", "par_bbrush.txt"))    # two colloid species
     text = gi.build_input(params, 0, False, seeds=(9592497, 9336433))
     with open(os.path.join(HERE, "data", "in.bbrush.expected")) as handle:
         expected = handle.read()
@@ -172,3 +171,68 @@ def test_bbrush_colloid_size_from_q():
     assert "pair_coeff 3 3 1.0 {0} ".format(d1) in text
     bigger = gb.colloid_diameters(params.replace(q=1.25))[0]
     assert bigger == pytest.approx(2 * d1)       # halving q doubles the colloid
+
+
+def star_params(**kw):
+    """Small star run with colloids of size ratios q=1.8 and q2=2.6."""
+    base = dict(arms=6, ns=10, lbox=80.0, q=1.8, q2=2.6, eps=0.2, colloids=2, ncoll1=2, ncoll2=3)
+    base.update(kw)
+    return fn.Params(**base)
+
+
+def test_star_with_two_species_data_file():
+    """Two colloid species: types 3 and 4, right counts, no overlaps, clear of the star."""
+    params = star_params()
+    d1, d2 = fn.star_colloid_diameters(params)
+    assert d1 == pytest.approx(2 * fn.star_radius(6, 10) / 1.8) and d2 > 0
+    groups = [(t, n, (d1, d2)[i - 1]) for i, t, n in params.species()]
+    text = gs.build_star(6, 10, 1.0, params.box, np.random.RandomState(4), colloids=groups, n_types=4)
+    n_atoms, n_bonds, atoms, _ = parse_data(text)
+    assert n_atoms == 6 * 10 + 1 + 5 and "4 atom types" in text
+    colloids = [(t, xyz) for t, xyz in atoms.values() if t >= 3]
+    assert [t for t, _ in colloids].count(3) == 2 and [t for t, _ in colloids].count(4) == 3
+    box = np.array(params.box)
+    radius = {3: d1 / 2, 4: d2 / 2}
+    centre = box / 2
+
+    def dist(a, b):
+        """Minimum-image distance."""
+        d = a - b
+        return np.linalg.norm(d - box * np.round(d / box))
+
+    for i, (t, xyz) in enumerate(colloids):
+        assert dist(xyz, centre) > fn.DEFAULT_RCORE + 10 + radius[t]
+        for t2, xyz2 in colloids[:i]:
+            assert dist(xyz, xyz2) > radius[t] + radius[t2]
+
+
+def test_colloid_placement_fails_in_a_tiny_box():
+    """An impossible placement raises instead of looping forever."""
+    with pytest.raises(RuntimeError, match="lbox"):
+        gs.place_colloids([(3, 1, 30.0)], [40.0] * 3, 20.0, np.random.RandomState(0), max_tries=500)
+
+
+def test_star_input_one_and_two_species():
+    """One species writes only type 3 coefficients; two add type 4 and the 3-4 cross term."""
+    one = gi.build_input(star_params(colloids=1), 0, False)
+    assert "pair_coeff 1 3 lj/cut" in one and "pair_coeff 1 4" not in one and "group coll type 3\n" in one
+    two = gi.build_input(star_params(), 0, False)
+    for line in ("pair_coeff 1 4 lj/cut", "pair_coeff 2 4 lj/cut", "pair_coeff 4 4 lj/sf", "pair_coeff 3 4 lj/sf"):
+        assert line in two
+    assert "group coll type 3 4" in two
+    d1, d2 = fn.star_colloid_diameters(star_params())
+    assert "pair_coeff 3 4 lj/sf 1.0 {0} ".format(np.mean([d1, d2])) in two
+    # a second eps for species 2
+    other = gi.build_input(star_params(eps2=0.4), 0, False)
+    assert "pair_coeff 1 4 lj/cut 0.4 " in other and "pair_coeff 1 3 lj/cut 0.2 " in other
+
+
+def test_bbrush_one_species_and_polymer_alone():
+    """colloids 1 -> only species 1 (type 3); colloids 0 -> no colloid lines at all."""
+    base = fn.read_par(os.path.join(HERE, "data", "par_bbrush.txt"))
+    one = gi.build_input(base.replace(colloids=1, ncoll1=5), 0, False, seeds=(1, 2))
+    assert "create_atoms 3 random 5 1 NULL" in one and "create_atoms 4" not in one
+    assert "pair_coeff 3 3" in one and "pair_coeff 4 4" not in one and "pair_coeff 3 4" not in one
+    alone = gi.build_input(base.replace(colloids=0), 0, False)
+    assert "create_atoms" not in alone and "pair_coeff 1 3" not in alone
+    assert "2 atom types" in gb.build_bottle_brush(30, 5, 1.0, 3, [60.0] * 3, np.random.RandomState(0), n_types=2)

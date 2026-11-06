@@ -122,6 +122,21 @@ def test_star_without_colloid_analysis(tmp_path):
     assert sorted(hist) == ["mon_distr_anch", "mon_distr_cm", "rg"] and tables == {}
 
 
+def test_star_two_colloid_species(tmp_path):
+    """Two species: files with the _b suffix, loading counts per species."""
+    params = fn.Params(arms=2, ns=2, lbox=LBOX, q=2.0, q2=3.0, eps=0.1, colloids=2, ncoll1=1, ncoll2=2)
+    rs = fn.star_radius(2, 2)
+    base = straight_frame([50 + rs, 50, 50])            # type 3 colloid within rs of the core
+    extra = "7 4 {} 50 50\n8 4 50 {} 50\n".format(50 + 5 * rs, 50 + 0.5 * rs)   # one far, one near
+    frame = base.replace("NUMBER OF ATOMS\n6", "NUMBER OF ATOMS\n8") + extra
+    os.makedirs(str(tmp_path / "configurations"))
+    (tmp_path / "configurations" / "star_0.lammpstrj").write_text(frame * 3)
+    hist, tables = pp.analyse(str(tmp_path / "configurations"), params)
+    assert "coll_distr_anch_b" in hist and "coll_distr_cm_b" in hist and "coll_distr_anch" in hist
+    assert tables["loading"][1] == [(1, 1), (1, 1)] and tables["loading_b"][1] == [(1, 1), (1, 1)]
+    assert all(np.all(np.isfinite(h.y)) for h in hist.values())
+
+
 # ---- bottlebrush ---------------------------------------------------------
 
 BB = fn.Params(architecture="bottlebrush", nb=9, ns=3, step=3, lbox=LBOX, eps=0.1,
