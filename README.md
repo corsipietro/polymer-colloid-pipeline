@@ -1,5 +1,7 @@
 # polymer-colloid-pipeline
 
+[![tests](https://github.com/corsipietro/polymer-colloid-pipeline/actions/workflows/tests.yml/badge.svg)](https://github.com/corsipietro/polymer-colloid-pipeline/actions/workflows/tests.yml)
+
 Scripts to set up, run and analyse molecular-dynamics simulations of a **polymer
 interacting with colloids** in a periodic box, using
 [LAMMPS](https://www.lammps.org), either on your own machine or on a PBS/Torque

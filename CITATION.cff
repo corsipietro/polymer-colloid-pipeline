@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "polymer-colloid-pipeline"
+abstract: >-
+  Python pipeline to set up, run (locally or on a PBS cluster) and analyse
+  LAMMPS molecular-dynamics simulations of star polymers and bottlebrushes
+  interacting with colloids.
+type: software
+authors:
+  - family-names: Corsi
+    given-names: Pietro
+license: BSD-3-Clause
+repository-code: "https://github.com/corsipietro/polymer-colloid-pipeline"
+keywords:
+  - molecular dynamics
+  - LAMMPS
+  - star polymers
+  - bottlebrush polymers
+  - colloids
+  - soft matter
+# Add the papers that used this code with a `preferred-citation:` or `references:` block.
