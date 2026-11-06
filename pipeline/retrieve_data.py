@@ -1,48 +1,57 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Collect the colloid distance distribution of every run into one folder.
+"""Collect one analysis file of every run of a scan into a single folder.
 
-For each run below ``root`` it copies ``analysis/coll_distr_anch.txt`` to
-``<out>/coll_<ns>_<f>_<q>_<eps>.txt`` (two columns ``x y``, header ``x y``).
-Runs without that file (not analysed yet) are reported and skipped.
+By default it gathers the colloid distance distribution: ``coll_distr_anch``
+for stars, ``coll_a_distr_cm`` for bottlebrushes (use ``--name`` for another
+histogram, e.g. ``rg``). Each file is copied to
+``<out>/<name>_<label>.txt`` (header ``x y``), where the label lists the main
+parameters of the run. Runs not analysed yet are reported and skipped.
 
 Usage::
 
-    python3 retrieve_data.py 2021_8_9_11_0_f60 [--out data]
+    python3 retrieve_data.py 2021_8_9_11_0_f60 [--out data] [--name rg]
 """
 
 import argparse
 import os
-import re
 
-from functions import create_dir, find_run_dirs
+from functions import create_dir, find_run_dirs, read_par
 
-_NUMBER = r"([0-9]+(?:\.[0-9]+)?)"
+DEFAULT_NAME = {"star": "coll_distr_anch", "bottlebrush": "coll_a_distr_cm"}
 
 
-def run_label(run):
-    """Return ``(ns, f, q, eps)`` as strings, parsed from a run directory path."""
-    q = re.search(r"/q_" + _NUMBER, run).group(1)
-    eps = re.search(r"/eps_" + _NUMBER, run).group(1)
-    arms = re.search(r"/f_([0-9]+)", run).group(1)
-    ns = re.search(r"/ns_([0-9]+)", run).group(1)
-    return ns, arms, q, eps
+def run_label(params):
+    """Return a file-name label for a run, e.g. ``100_50_1.8_0.2`` (ns, f, q, eps)."""
+    if params.architecture == "star":
+        parts = [params.ns, params.arms]
+        if params.colloids:
+            parts += [params.q, params.eps]
+    else:
+        parts = [params.ns, params.nb, params.step]
+        if params.colloids:
+            parts.append(params.eps)
+    return "_".join(str(p) for p in parts)
 
 
 def main():
-    """Gather ``coll_distr_anch.txt`` of all runs into the output folder."""
+    """Gather the chosen analysis file of all runs into the output folder."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("root", help="directory created by cluster_submit.py")
     parser.add_argument("--out", default="data", help="output folder (default: data)")
+    parser.add_argument("--name", default=None,
+                        help="analysis file to collect, without .txt (default: per architecture)")
     args = parser.parse_args()
 
     create_dir(args.out)
     for run in find_run_dirs(args.root):
-        source = os.path.join(run, "analysis", "coll_distr_anch.txt")
+        params = read_par(os.path.join(run, "par.txt"))
+        name = args.name or DEFAULT_NAME[params.architecture]
+        source = os.path.join(run, "analysis", name + ".txt")
         if not os.path.isfile(source):
-            print("skipped (no analysis): {}".format(run))
+            print("skipped (no {}): {}".format(name, run))
             continue
-        target = os.path.join(args.out, "coll_{}_{}_{}_{}.txt".format(*run_label(run)))
+        target = os.path.join(args.out, "{}_{}.txt".format(name, run_label(params)))
         with open(source) as src, open(target, "w") as dst:
             next(src)                      # drop the "# x    y" header
             dst.write("x y\n")

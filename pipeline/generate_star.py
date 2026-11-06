@@ -1,23 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Build the LAMMPS data file ``star.dat`` for one star + one colloid.
+"""Build the LAMMPS data file ``star.dat`` for a star polymer (+ optional colloid).
 
-Atom types:  1 = arm monomer, 2 = star core (anchor), 3 = colloid.
+Atom types:  1 = arm monomer, 2 = star core (anchor), 3 = colloid (only if present).
 Bond types:  1 = monomer-monomer, 2 = core-first monomer of an arm.
 The core sits at the box centre, the arms are straight rays whose directions
 are drawn at random on the sphere with a minimum separation, and the colloid
-is placed at a random point close to the box origin (far from the star).
+(if any) is placed at a random point close to the box origin (far from the star).
 
-Usage (from a run directory containing ``par.txt``)::
-
-    python3 generate_star.py [--seed N]
+This module only holds the builder; ``generate_system.py`` is the entry point.
 """
-
-import argparse
 
 import numpy as np
 
-from functions import DEFAULT_RCORE, create_dir, read_par
+from functions import DEFAULT_RCORE
 
 
 def random_arm_directions(arms, radius, min_dist, rng, max_tries=200000):
@@ -62,11 +58,11 @@ def random_arm_directions(arms, radius, min_dist, rng, max_tries=200000):
     return directions
 
 
-def build_star(arms, ns, sigma, box, rng, r_core=DEFAULT_RCORE):
-    """Return the text of the LAMMPS data file for a star and one colloid.
+def build_star(arms, ns, sigma, box, rng, r_core=DEFAULT_RCORE, colloid=True):
+    """Return the text of the LAMMPS data file for a star (and one colloid).
 
     Atom ids: 1 = core, 2..1+arms*ns = arm monomers (arm after arm, from the
-    core outwards), arms*ns+2 = colloid.
+    core outwards), arms*ns+2 = colloid (if present).
 
     Args:
         arms: number of arms.
@@ -75,20 +71,23 @@ def build_star(arms, ns, sigma, box, rng, r_core=DEFAULT_RCORE):
         box: ``[Lx, Ly, Lz]``.
         rng: ``numpy.random.RandomState``.
         r_core: core radius (``rcore`` in par.txt).
+        colloid: whether to add the colloid.
     """
     center = np.asarray(box, dtype=float) / 2
-    ntot = 1 + ns * arms  # core + monomers (the colloid is atom ntot + 1)
+    ntot = 1 + ns * arms  # core + monomers
+    natoms = ntot + 1 if colloid else ntot
     directions = random_arm_directions(arms, r_core + sigma / 2, sigma, rng)
-    colloid = [rng.uniform(0, box[0] / 10) for _ in range(3)]
 
     out = []
     out.append("LAMMPS data file\n\n")
-    out.append("{} atoms\n".format(ntot + 1))
+    out.append("{} atoms\n".format(natoms))
     out.append("{} bonds\n".format(ntot - 1))
     out.append("0 angles\n0 dihedrals\n0 impropers\n\n")
-    out.append("3 atom types\n2 bond types\n0 angle types\n0 dihedral types\n0 improper types\n\n")
+    ntypes = 3 if colloid else 2
+    out.append("{} atom types\n2 bond types\n0 angle types\n0 dihedral types\n"
+               "0 improper types\n\n".format(ntypes))
     out.append("0.0 {0} xlo xhi\n0.0 {1} ylo yhi\n0.0 {2} zlo zhi\n\n".format(*box))
-    out.append("Masses\n\n1 1\n2 1\n3 1\n\n")
+    out.append("Masses\n\n" + "".join("{} 1\n".format(t) for t in range(1, ntypes + 1)) + "\n")
 
     # Atoms: "id molecule type x y z"
     out.append("Atoms\n\n")
@@ -100,7 +99,9 @@ def build_star(arms, ns, sigma, box, rng, r_core=DEFAULT_RCORE):
         for position, atom_id in enumerate(ids, 1):
             xyz = center + (r_core + sigma * position - sigma / 2) * direction
             out.append("{0} 1 1 {1} {2} {3}\n".format(atom_id, *xyz))
-    out.append("{0} 2 3 {1} {2} {3}\n".format(ntot + 1, *colloid))
+    if colloid:
+        position = [rng.uniform(0, box[0] / 10) for _ in range(3)]
+        out.append("{0} 2 3 {1} {2} {3}\n".format(ntot + 1, *position))
     out.append("\n")
 
     # Bonds: "id type atom1 atom2"
@@ -117,28 +118,7 @@ def build_star(arms, ns, sigma, box, rng, r_core=DEFAULT_RCORE):
 
     # Velocities are all zero here; LAMMPS thermalises the system at run time.
     out.append("Velocities\n\n")
-    for atom_id in range(1, ntot + 2):
+    for atom_id in range(1, natoms + 1):
         out.append("{0} 0 0 0\n".format(atom_id))
     out.append("\n")
     return "".join(out)
-
-
-def main():
-    """Read ``par.txt`` and write ``star.dat`` in the current directory."""
-    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--seed", type=int, default=None,
-                        help="seed of the random number generator (default: random)")
-    args = parser.parse_args()
-
-    for directory in ("gyration", "configurations", "analysis"):
-        create_dir(directory)
-
-    params = read_par()
-    rng = np.random.RandomState(args.seed)
-    text = build_star(params.arms, params.ns, params.sigma, params.box, rng, params.rcore)
-    with open("star.dat", "w") as handle:
-        handle.write(text)
-
-
-if __name__ == "__main__":
-    main()

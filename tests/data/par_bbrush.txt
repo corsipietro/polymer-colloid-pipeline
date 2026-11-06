@@ -1,0 +1,8 @@
+architecture bottlebrush
+mode local
+nb 99
+ns 50
+sigma 1
+step 3
+lbox 120
+restart 0

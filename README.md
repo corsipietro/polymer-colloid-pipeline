@@ -1,85 +1,143 @@
-# star-colloid-pipeline
+# polymer-colloid-pipeline
 
-Scripts to set up, run and analyse molecular-dynamics simulations of **one star
-polymer interacting with one colloid** in a periodic box, using
-[LAMMPS](https://www.lammps.org) on a PBS/Torque cluster.
+Scripts to set up, run and analyse molecular-dynamics simulations of a **polymer
+interacting with colloids** in a periodic box, using
+[LAMMPS](https://www.lammps.org), either on your own machine or on a PBS/Torque
+cluster. Two architectures are supported, chosen with the `architecture` key of
+`par.txt`:
 
-The star has `f` arms of `ns` monomers each, attached to a core bead. The colloid
-is a single larger bead with a repulsive core and an attractive tail towards the
-star beads. A scan varies the colloid/star size ratio `q` and the attraction
-strength `eps` at a fixed, very low volume fraction (one star + one colloid in a
-large box), and the analysis measures how the star shape (radius of gyration,
-monomer density) and the colloid position (distance distribution, number of
-colloids "loaded" inside the star) respond.
+| `architecture` | polymer | colloids (optional, `colloids 1/0`) |
+|---|---|---|
+| `star` | `f` arms of `ns` monomers on a core bead | one colloid of diameter `2 rs / q` |
+| `bottlebrush` | backbone of `nb` beads with a side chain of `ns` beads every `step` beads | `ncoll1` of diameter `dcoll1` and `ncoll2` of diameter `dcoll2`, inserted at random |
 
-> The physical description above is inferred from the code; adjust it to the
-> wording of the paper/thesis this belongs to.
+Units are Lennard-Jones, temperature 1, Nosé–Hoover (NVT), FENE bonds.
+
+> The physical description is inferred from the code; adjust it to the wording of
+> the paper/thesis this belongs to.
 
 ## Layout
 
 ```
 pipeline/
-  functions.py          shared helpers (par.txt I/O, restart numbering, run discovery)
-  generate_star.py      par.txt  ->  star.dat   (LAMMPS data file)
-  generate_input.py     par.txt  ->  in.star    (LAMMPS input)
-  post_processing.py    configurations/*.lammpstrj  ->  analysis/*.txt
-  cluster_submit.py     build the scan directory tree and submit every run
-  cluster_restart.py    continue the runs of a scan from their restart files
-  post_cluster_submit.py  submit post_processing.py for every run of a scan
-  retrieve_data.py      gather coll_distr_anch.txt of all runs in one folder
-  start_py.csh, post_py.csh   PBS submission scripts (site-specific settings at the top)
-example/par.txt         example run parameters
-tests/                  pytest suite
+  functions.py            shared helpers: par.txt I/O, restart numbering, run discovery
+  generate_system.py      par.txt -> star.dat / bbrush.dat      (entry point)
+    generate_star.py, generate_bottle_brush.py                  (builders)
+  generate_input.py       par.txt -> in.star / in.bbrush
+  run_simulation.py       generate + run LAMMPS (used locally and by the cluster job)
+  post_processing.py      configurations/*.lammpstrj -> analysis/*.txt
+  launcher.py             starts a run/analysis locally or on the cluster
+  cluster_submit.py       build a parameter scan and start every run
+  cluster_restart.py      continue the runs of a scan from their restart files
+  post_cluster_submit.py  run post_processing.py for every run of a scan
+  retrieve_data.py        gather one analysis file of all runs in one folder
+  start_py.csh, post_py.csh   PBS scripts (site-specific settings at the top)
+example/                  par_star.txt, par_bottlebrush.txt
+tests/                    pytest suite
 ```
-
-## Workflow
-
-1. **Configure** the scan at the top of `pipeline/cluster_submit.py`
-   (`ARMS`, `NS`, `RATIO`, `EPS`, `PHI`, `RCORE`) and the cluster settings at the top of
-   `start_py.csh` / `post_py.csh` (Python executable, LAMMPS path, wall time).
-2. **Submit** (from the `pipeline/` directory):
-   ```bash
-   python3 cluster_submit.py --dry-run   # check the directory tree first
-   python3 cluster_submit.py
-   ```
-   This creates `<date>_f<arms>/f_<f>/ns_<ns>/eps_<eps>/q_<q>/` for every
-   combination, with its own `par.txt`. Each job runs `generate_star.py`,
-   `generate_input.py`, then `lmp < in.star` (up to 48 h, restarts written every
-   100000 steps, configurations every 500000 steps).
-3. **Continue** unfinished runs (outputs get the next index, nothing is overwritten):
-   ```bash
-   python3 cluster_restart.py <scan_dir> [--ns 100]
-   ```
-4. **Analyse**:
-   ```bash
-   python3 post_cluster_submit.py <scan_dir> [--ns 100]
-   python3 retrieve_data.py <scan_dir> --out data
-   ```
 
 ## `par.txt`
 
-| key | meaning |
-|---|---|
-| `f` | number of arms |
-| `ns` | monomers per arm |
-| `sigma` | monomer diameter (LJ units) |
-| `lbox` | edge of the cubic box |
-| `q` | star radius / colloid radius |
-| `eps` | colloid–monomer attraction strength |
-| `restart` | `1` to continue from `star2.restart` |
-| `rcore` | *(optional, default 1.75)* core radius. Arms are placed on the core by random sequential insertion: at 1.75 at most ~42 arms fit, `f = 50` needs `rcore >= 2.0`, `f = 60` needs `>= 2.25`. If it does not fit, `generate_star.py` stops with an explicit error. |
+One `key value` pair per line.
 
-The star radius used throughout is `rs = 0.6 f^(1/5) ns^0.588`.
+| key | applies to | meaning |
+|---|---|---|
+| `architecture` | all | `star` or `bottlebrush` (default `star`) |
+| `mode` | all | `cluster` (PBS queue, default) or `local` (this machine) |
+| `colloids` | all | `1` with colloids (default), `0` bare polymer |
+| `ns` | all | monomers per arm / per side chain |
+| `sigma` | all | monomer diameter |
+| `lbox` | all | edge of the cubic box |
+| `restart` | all | `1` to continue from the restart file |
+| `seed` | all | *(optional)* integer seed; omit for a random one |
+| `eps` | with colloids | colloid–monomer attraction strength (bottlebrush default 0.1) |
+| `f` | star | number of arms |
+| `q` | star + colloid | star radius / colloid radius; star radius is `rs = 0.6 f^(1/5) ns^0.588` |
+| `rcore` | star | *(optional, default 1.75)* core radius. Arms are placed by random sequential insertion: 1.75 fits at most ~42 arms, `f = 50` needs `>= 2.0`, `f = 60` `>= 2.25`; otherwise `generate_system.py` stops with an error |
+| `nb`, `step` | bottlebrush | backbone length and grafting spacing |
+| `ncoll1`, `dcoll1`, `ncoll2`, `dcoll2` | bottlebrush + colloids | number and diameter of the two colloid species (defaults 40, 14, 40, 10) |
 
-## Output of `post_processing.py` (`analysis/`)
+Old `par.txt` files (without `architecture`) are read as star runs with a colloid.
+The bottlebrush box must exceed `(nb + 2) sigma` along the backbone and
+`2 (ns + 1) sigma` across it; the generator checks it.
 
-`mon_distr_anch`, `mon_distr_cm`, `coll_distr_anch`, `coll_distr_anch_2rg`,
-`coll_distr_cm`, `rg` (two columns `x y`) and `loading.txt` (per frame: colloid
-within `rs`, within `2 rs`). The first frame of every trajectory file is skipped.
+## Running
+
+Configure the scan in the PARAMETERS block of `pipeline/cluster_submit.py`
+(architecture, mode, colloids, values to scan), then, from `pipeline/`:
+
+```bash
+python3 cluster_submit.py --dry-run     # create the directories and par.txt, start nothing
+python3 cluster_submit.py               # start every run, in the mode set in the file
+python3 cluster_submit.py --mode local  # override the mode
+```
+
+Each run directory gets its own `par.txt` and a copy of the scripts; it builds the
+data file and the LAMMPS input, then runs LAMMPS (`run 1000000000`: it is stopped
+by hand or by the wall time). Restart files are written periodically.
+
+### Cluster mode
+
+`start_py.csh` writes a PBS job and submits it with `qsub`. Edit the top of
+`start_py.csh` and `post_py.csh` for your site (Python executable, LAMMPS path,
+wall time). All runs of the scan are submitted at once.
+
+### Local mode
+
+The simulation is started in the background in the run directory
+(`python3 run_simulation.py`, output in `run.log`). LAMMPS is called as
+`$LAMMPS_CMD -in in.star` (or `in.bbrush`); `LAMMPS_CMD` defaults to `lmp` and may
+include a launcher:
+
+```bash
+export LAMMPS_CMD="mpirun -np 4 lmp"
+```
+
+**In local mode, run one simulation at a time.** The simulations are open-ended and
+all of them compete for the same cores, so several at once are slow; `cluster_submit.py`
+refuses a local scan with more than one run unless `--allow-many` is given. Stop a
+local run with `kill` on its process (find it with `ps`).
+
+### Continue, analyse, collect
+
+```bash
+python3 cluster_restart.py <scan_dir> [--ns 100] [--mode local]   # next output index, nothing overwritten
+python3 post_cluster_submit.py <scan_dir> [--ns 100]               # run the analysis of every run
+python3 retrieve_data.py <scan_dir> --out data [--name rg]         # gather one analysis file
+```
+
+`mode` is taken from each run's `par.txt` unless `--mode` is given.
+
+## Analysis output (`analysis/`)
+
+Two-column histograms `x y` plus tables; the first frame of every trajectory file is skipped.
+
+* **star**: `mon_distr_anch`, `mon_distr_cm`, `rg`, and with a colloid `coll_distr_anch`,
+  `coll_distr_anch_2rg`, `coll_distr_cm`, `loading.txt` (colloid within `rs` / `2 rs` per frame).
+* **bottlebrush**: `mon_distr_cm`, `rg`, `end_to_end.txt` (end-to-end distance and radii of
+  gyration per frame) and with colloids `coll_a_distr_cm`, `coll_b_distr_cm`. This analysis was
+  written for the refactoring; the original bottlebrush analysis scripts were not available.
+
+LAMMPS also writes `gyration/gyr_all_<n>.txt` (and `gyr_bbone_<n>.txt`,
+`bbone_extremes_<n>.lammpstrj` for the bottlebrush).
+
+## Visualising a simulation
+
+The scripts only produce numbers; to look at the system you need a molecular
+visualiser, e.g. [VMD](https://www.ks.uiuc.edu/Research/vmd/) (used by the author).
+Trajectories are in `configurations/<star|bbrush>_<n>.lammpstrj`:
+
+```bash
+vmd -lammpstrj configurations/star_0.lammpstrj
+```
+
+Atom types are 1 = monomer (side chain), 2 = core / backbone, 3 and 4 = colloids.
+VMD draws all atoms with the same size by default: set the radius per type
+(e.g. in *Graphics → Representations → VDW*, selection `type 3`) to see the colloid diameters.
 
 ## Requirements and tests
 
-* Python ≥ 3.4 (the cluster scripts avoid f-strings and annotations on purpose), `numpy`.
+* Python ≥ 3.4 (the run scripts avoid f-strings and annotations on purpose), `numpy`.
 * LAMMPS with the `MOLECULE` package (`fene`, `lj/sf`).
 
 ```bash
@@ -87,5 +145,6 @@ pip install -r requirements.txt -r requirements-dev.txt
 python3 -m pytest -q
 ```
 
-`tests/data/in.star.expected` is an `in.star` produced by the original scripts;
-the suite checks that the refactored generator reproduces it byte for byte.
+`tests/data/in.star.expected` and `tests/data/in.bbrush.expected` are input files
+written by the original scripts; the suite checks that the generators reproduce them
+(the bottlebrush one except for the repulsive cutoff, which is now exactly 2^(1/6) instead of the rounded 1.1224).

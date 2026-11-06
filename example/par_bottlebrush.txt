@@ -1,0 +1,14 @@
+architecture bottlebrush
+mode local
+colloids 1
+nb 99
+ns 50
+sigma 1
+step 3
+lbox 120
+eps 0.1
+ncoll1 40
+dcoll1 14
+ncoll2 40
+dcoll2 10
+restart 0

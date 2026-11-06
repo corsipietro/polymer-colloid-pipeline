@@ -1,7 +1,11 @@
+architecture star
+mode cluster
+colloids 1
 f 50
 ns 100
 sigma 1
 lbox 400
 q 1.8
 eps 0.2
+rcore 2.25
 restart 0
